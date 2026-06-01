@@ -404,6 +404,47 @@ summary {
 .issue-list .high { border-left: 4px solid var(--danger); }
 .issue-list .medium { border-left: 4px solid var(--gold); }
 .issue-list .low { border-left: 4px solid var(--accent); }
+.tool-output {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 250, 0.68);
+  padding: 14px;
+}
+.tool-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--accent-dark);
+  font-weight: 900;
+}
+.tool-output p {
+  margin: 14px 0 0;
+  color: var(--muted);
+}
+mark {
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--accent-dark);
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+mark.ok {
+  background: #d8ead6;
+  color: var(--accent);
+}
+mark.error {
+  background: #f0d9d3;
+  color: var(--danger);
+}
+.technical-input {
+  margin-top: 12px;
+  border-radius: 16px;
+  background: rgba(225, 229, 216, 0.45);
+}
 pre {
   overflow: auto;
   max-height: 280px;

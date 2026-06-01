@@ -33,12 +33,24 @@ type Analysis = {
   answer: string;
   tables: Array<{ name: string; columns: string[]; rows: Record<string, unknown>[]; row_count: number }>;
   charts: Array<{ figure: unknown; spec: { title: string; chart_type: string } }>;
-  tool_calls: Array<{ tool: string; status: string; arguments: Record<string, unknown>; result?: Record<string, unknown> }>;
+  tool_calls: Array<{ tool: string; status: string; arguments: Record<string, unknown>; result?: Record<string, unknown>; error?: string }>;
   warnings: string[];
   validation: Record<string, unknown>;
   trace: Record<string, unknown>;
   suggested_followups: string[];
 };
+
+function ResultTable({ table }: { table: Analysis["tables"][number] }) {
+  return (
+    <div className="table-wrap">
+      <h3>{table.name} · {table.row_count} rows</h3>
+      <table>
+        <thead><tr>{table.columns.map((col) => <th key={col}>{col}</th>)}</tr></thead>
+        <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
 
 const api = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
   const token = localStorage.getItem("demoToken") || "";
@@ -63,6 +75,48 @@ function Plot({ figure }: { figure: unknown }) {
     };
   }, [figure]);
   return <div className="plot" ref={ref} />;
+}
+
+function ToolTrace({ analysis }: { analysis: Analysis | null }) {
+  if (!analysis) return <p>Run an analysis to inspect validated tool outputs.</p>;
+
+  const tableForTool = (tool: string) => {
+    if (tool === "run_safe_sql") return analysis.tables.find((table) => table.name === "query_result");
+    if (tool === "run_transform") return analysis.tables.find((table) => table.name === "transform_result");
+    return undefined;
+  };
+
+  const outputSummary = (call: Analysis["tool_calls"][number]) => {
+    if (call.status === "error") return call.error || "The tool failed validation.";
+    if (call.tool === "profile_dataset") return `Profiled ${call.result?.row_count ?? "unknown"} rows and ${call.result?.column_count ?? "unknown"} columns.`;
+    if (call.tool === "detect_data_quality_issues") return `Detected ${call.result?.issue_count ?? 0} data-quality issue(s).`;
+    if (call.tool === "run_safe_sql" || call.tool === "run_transform") return `Returned ${call.result?.row_count ?? 0} row(s).`;
+    if (call.tool === "create_chart") return `Created a validated ${call.result?.chart_type ?? "chart"} chart.`;
+    if (call.tool === "summarize_result") return "Generated the final analyst answer.";
+    return "Completed successfully.";
+  };
+
+  return (
+    <>
+      {analysis.tool_calls.map((call, index) => {
+        const table = tableForTool(call.tool);
+        return (
+          <section key={`${call.tool}-${index}`} className="tool-output">
+            <div className="tool-heading">
+              <span>{call.tool}</span>
+              <mark className={call.status}>{call.status}</mark>
+            </div>
+            <p>{outputSummary(call)}</p>
+            {table && <ResultTable table={table} />}
+            <details className="technical-input">
+              <summary>Validated parameters</summary>
+              <pre>{JSON.stringify(call.arguments, null, 2)}</pre>
+            </details>
+          </section>
+        );
+      })}
+    </>
+  );
 }
 
 function App() {
@@ -275,13 +329,7 @@ function App() {
                 </section>
               ))}
               {activeAnalysis.tables.map((table) => (
-                <div className="table-wrap" key={table.name}>
-                  <h3>{table.name} · {table.row_count} rows</h3>
-                  <table>
-                    <thead><tr>{table.columns.map((col) => <th key={col}>{col}</th>)}</tr></thead>
-                    <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
-                  </table>
-                </div>
+                <ResultTable key={table.name} table={table} />
               ))}
             </article>
           ) : (
@@ -332,13 +380,7 @@ function App() {
             <details>
               <summary>Tool trace</summary>
               <div className="trace-list">
-                {(activeAnalysis?.tool_calls || []).map((call, index) => (
-                  <details key={`${call.tool}-${index}`}>
-                    <summary>{call.tool}</summary>
-                    <pre>{JSON.stringify({ arguments: call.arguments, result: call.result }, null, 2)}</pre>
-                  </details>
-                ))}
-                {!activeAnalysis && <p>Run an analysis to inspect validated tool calls.</p>}
+                <ToolTrace analysis={activeAnalysis} />
               </div>
             </details>
 

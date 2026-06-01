@@ -114,12 +114,14 @@ test("runs a governed analysis from the analyst workbench", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "Analyst Answer" })).toBeVisible();
   await expect(answer.getByText("Validated", { exact: true })).toBeVisible();
   await expect(page.getByText("A validated Plotly chart was generated")).toBeVisible();
-  await expect(page.getByText("query_result · 2 rows")).toBeVisible();
-  await expect(page.getByText("avg_alcohol", { exact: true })).toBeVisible();
+  await expect(answer.getByText("query_result · 2 rows")).toBeVisible();
+  await expect(answer.getByText("avg_alcohol", { exact: true })).toBeVisible();
   await expect(page.locator(".plot")).toBeVisible();
 
   await page.getByText("Tool trace").click();
   await expect(page.getByText("run_safe_sql")).toBeVisible();
+  await expect(page.getByText("Returned 2 row(s).")).toBeVisible();
+  await expect(page.getByText("Validated parameters").first()).toBeVisible();
 });
 
 test("shows a blocked trust state for unsafe requests", async ({ page }) => {
