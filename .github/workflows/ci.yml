@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./api[dev]
+      - name: Backend tests
+        env:
+          PYTHONPATH: api/src
+          APP_ENV: test
+          DATABASE_URL: sqlite+pysqlite:///:memory:
+        run: pytest -q
+      - name: Benchmark smoke
+        env:
+          PYTHONPATH: api/src
+          APP_ENV: test
+          DATABASE_URL: sqlite+pysqlite:///:memory:
+        run: python scripts/run_benchmark.py
+      - name: Frontend build
+        run: |
+          cd ui
+          npm install
+          npm run build
+      - name: Deployment config
+        run: docker compose config >/tmp/tabular-compose.yml
+
