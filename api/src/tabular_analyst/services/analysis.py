@@ -2,16 +2,19 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from tabular_analyst.adapters.llm import build_planner
 from tabular_analyst.core.config import Settings
 from tabular_analyst.domain.models import AnalysisRecord, DatasetRecord
-from tabular_analyst.domain.schemas import AnalysisResponse, ChartSpec
+from tabular_analyst.domain.schemas import AnalysisResponse, ChartSpec, TransformSpec
 from tabular_analyst.services.charts import build_chart
 from tabular_analyst.services.files import read_dataframe
 from tabular_analyst.services.profiling import detect_quality_issues, profile_dataframe
 from tabular_analyst.services.sql_safety import run_safe_sql
+from tabular_analyst.services.transforms import run_transform
 
 
 def _dataset_path(settings: Settings, dataset: DatasetRecord) -> Path:
@@ -28,7 +31,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     warnings: list[str] = []
     tables: list[dict] = []
     charts: list[dict] = []
-    validation = {"sql_safety": "not_run", "chart_validation": "not_run", "blocked": False}
+    validation = {"sql_safety": "not_run", "chart_validation": "not_run", "transform_validation": "not_run", "blocked": False, "tool_error": None}
     trace = {"plan": plan, "executed_tools": []}
 
     if plan.get("blocked"):
@@ -42,33 +45,52 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
             tool = step["tool"]
             args = step.get("arguments", {})
             record = {"tool": tool, "arguments": args, "status": "ok"}
-            if tool == "profile_dataset":
-                record["result"] = {"row_count": profile["row_count"], "column_count": profile["column_count"]}
-            elif tool == "detect_data_quality_issues":
-                record["result"] = {"issue_count": len(issues)}
-                if issues:
-                    warnings.extend(issue["message"] for issue in issues[:5])
-            elif tool == "run_safe_sql":
-                result = run_safe_sql(df, args["sql"])
-                validation["sql_safety"] = "passed"
-                tables.append({"name": "query_result", **result})
-                last_table_df = pd.DataFrame(result["rows"])
-                record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
-            elif tool == "create_chart":
-                source = last_table_df if last_table_df is not None and not last_table_df.empty else df
-                chart = build_chart(source, ChartSpec(**args))
-                charts.append(chart)
-                validation["chart_validation"] = "passed"
-                record["result"] = {"chart_type": args["chart_type"], "validated": True}
-            elif tool == "summarize_result":
-                answer_parts.append(f"Analyzed {profile['row_count']} rows and {profile['column_count']} columns using governed tools.")
-                if tables:
-                    answer_parts.append(f"The main query returned {tables[-1]['row_count']} rows.")
-                if issues:
-                    answer_parts.append(f"I found {len(issues)} data-quality warning(s); review the inspector before making decisions.")
-                if charts:
-                    answer_parts.append("A validated Plotly chart was generated for the result.")
-                record["result"] = {"summary": "created"}
+            try:
+                if tool == "profile_dataset":
+                    record["result"] = {"row_count": profile["row_count"], "column_count": profile["column_count"]}
+                elif tool == "detect_data_quality_issues":
+                    record["result"] = {"issue_count": len(issues)}
+                    if issues:
+                        warnings.extend(issue["message"] for issue in issues[:5])
+                elif tool == "run_safe_sql":
+                    result = run_safe_sql(df, args["sql"])
+                    validation["sql_safety"] = "passed"
+                    tables.append({"name": "query_result", **result})
+                    last_table_df = pd.DataFrame(result["rows"])
+                    record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
+                elif tool == "run_transform":
+                    result = run_transform(df, TransformSpec(**args))
+                    validation["transform_validation"] = "passed"
+                    tables.append({"name": "transform_result", **result})
+                    last_table_df = pd.DataFrame(result["rows"])
+                    record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
+                elif tool == "create_chart":
+                    source = last_table_df if last_table_df is not None and not last_table_df.empty else df
+                    chart = build_chart(source, ChartSpec(**args))
+                    charts.append(chart)
+                    validation["chart_validation"] = "passed"
+                    record["result"] = {"chart_type": args["chart_type"], "validated": True}
+                elif tool == "summarize_result":
+                    answer_parts.append(f"Analyzed {profile['row_count']} rows and {profile['column_count']} columns using governed tools.")
+                    if tables:
+                        answer_parts.append(f"The main result returned {tables[-1]['row_count']} rows.")
+                    if issues:
+                        answer_parts.append(f"I found {len(issues)} data-quality warning(s); review the inspector before making decisions.")
+                    if charts:
+                        answer_parts.append("A validated Plotly chart was generated for the result.")
+                    record["result"] = {"summary": "created"}
+                else:
+                    raise ValueError(f"Unsupported tool requested by planner: {tool}")
+            except (HTTPException, KeyError, ValidationError, ValueError) as exc:
+                detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                record["status"] = "error"
+                record["error"] = detail
+                validation["tool_error"] = {"tool": tool, "detail": detail}
+                warnings.append(f"{tool} failed validation: {detail}")
+                answer_parts.append("I could not complete the requested analysis because one governed tool failed validation. The failed tool call was saved in the trace.")
+                tool_calls.append(record)
+                trace["executed_tools"].append(record)
+                break
             tool_calls.append(record)
             trace["executed_tools"].append(record)
         answer = " ".join(answer_parts) or "The dataset was profiled and no additional action was required."
@@ -100,4 +122,3 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     session.add(analysis)
     session.commit()
     return AnalysisResponse(id=analysis.id, dataset_id=dataset.id, question=question, **response_payload)
-

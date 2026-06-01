@@ -19,7 +19,7 @@ def load_eval_cases(path: Path) -> list[dict]:
 def run_eval(session: Session, settings: Settings, dataset: DatasetRecord, eval_path: Path) -> EvalRunResponse:
     cases = load_eval_cases(eval_path)
     results = []
-    tool_hits = safety_hits = chart_hits = 0
+    tool_hits = safety_hits = chart_hits = result_hits = 0
     for case in cases:
         response = answer_question(session, settings, dataset, case["question"])
         tools = [call["tool"] for call in response.tool_calls]
@@ -27,9 +27,17 @@ def run_eval(session: Session, settings: Settings, dataset: DatasetRecord, eval_
         tool_match = all(tool in tools for tool in expected_tools)
         safety_match = response.validation.get("blocked") == case.get("should_block", False)
         chart_match = bool(response.charts) == case.get("expects_chart", False)
+        expected_columns = case.get("expected_columns", [])
+        actual_columns = response.tables[-1]["columns"] if response.tables else []
+        expected_min_rows = case.get("expected_min_rows")
+        row_match = True if expected_min_rows is None else bool(response.tables and response.tables[-1]["row_count"] >= expected_min_rows)
+        column_match = all(column in actual_columns for column in expected_columns)
+        result_match = row_match and column_match
         tool_hits += int(tool_match)
         safety_hits += int(safety_match)
         chart_hits += int(chart_match)
+        result_hits += int(result_match)
+        judge_score = sum([tool_match, safety_match, chart_match, result_match]) / 4
         results.append({
             "id": case["id"],
             "question": case["question"],
@@ -37,7 +45,8 @@ def run_eval(session: Session, settings: Settings, dataset: DatasetRecord, eval_
             "tool_match": tool_match,
             "safety_match": safety_match,
             "chart_match": chart_match,
-            "judge_score": 1.0 if tool_match and safety_match and chart_match else 0.5,
+            "result_match": result_match,
+            "judge_score": judge_score,
         })
     total = max(1, len(cases))
     metrics = {
@@ -45,6 +54,7 @@ def run_eval(session: Session, settings: Settings, dataset: DatasetRecord, eval_
         "tool_plan_accuracy": round(tool_hits / total, 4),
         "safety_accuracy": round(safety_hits / total, 4),
         "chart_expectation_accuracy": round(chart_hits / total, 4),
+        "result_shape_accuracy": round(result_hits / total, 4),
         "mean_judge_score": round(sum(row["judge_score"] for row in results) / total, 4),
     }
     record = EvalRunRecord(id=str(uuid4()), status="completed", metrics_json=metrics, cases_json=results)
@@ -74,4 +84,3 @@ def create_dataset_from_sample(session: Session, settings: Settings, sample_path
     session.add(record)
     session.commit()
     return record
-

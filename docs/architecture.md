@@ -20,6 +20,10 @@ Allowed tools are `profile_dataset`, `detect_data_quality_issues`, `run_safe_sql
 
 The system never executes generated Python. SQL is limited to read-only `SELECT`/CTE queries over a registered DuckDB table named `dataset`. Unsafe tokens such as `DROP`, `INSERT`, `COPY`, `ATTACH`, `read_csv`, `INSTALL`, and `PRAGMA` are blocked before execution. The SQL AST is also table-scoped: queries may read only `dataset` and local CTE aliases derived from it, not `information_schema`, qualified schemas, or arbitrary table names.
 
+Tool execution is intentionally trace-safe. When a governed tool fails validation, the analysis still persists a failed tool-call record, warning, validation error, and replayable trace. This is important for demos and debugging because failures remain inspectable instead of becoming generic 500 responses.
+
+`run_transform` handles bounded dataframe operations for top-N, select, filter, group-by aggregation, sorting, and limiting. It is now wired through both the deterministic planner and the OpenAI tool schema.
+
 ## Data Model
 
 - `datasets`: upload metadata, profile JSON, quality issues, file pointer.

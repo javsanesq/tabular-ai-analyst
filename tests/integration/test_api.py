@@ -61,3 +61,40 @@ def test_xlsx_upload_is_supported(client):
     dataset = response.json()
     assert dataset["row_count"] == 2
     assert any(column["name"] == "revenue" and column["inferred_type"] == "numeric" for column in dataset["profile"]["columns"])
+
+
+def test_transform_tool_and_failed_tool_trace_are_saved(client, monkeypatch):
+    response = client.post("/api/v1/datasets/demo/wine-quality")
+    assert response.status_code == 200, response.text
+    dataset = response.json()
+
+    transform = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Show the top 3 rows by alcohol."},
+    )
+    assert transform.status_code == 200, transform.text
+    payload = transform.json()
+    assert any(call["tool"] == "run_transform" and call["status"] == "ok" for call in payload["tool_calls"])
+    assert payload["validation"]["transform_validation"] == "passed"
+    assert payload["tables"][-1]["row_count"] == 3
+
+    class BadPlanner:
+        def plan(self, question, profile, issues):
+            return {
+                "blocked": False,
+                "steps": [
+                    {"tool": "profile_dataset", "arguments": {}},
+                    {"tool": "run_safe_sql", "arguments": {"sql": "select * from information_schema.tables"}},
+                    {"tool": "summarize_result", "arguments": {}},
+                ],
+            }
+
+    monkeypatch.setattr("tabular_analyst.services.analysis.build_planner", lambda settings: BadPlanner())
+    failed = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Try an invalid table read."},
+    )
+    assert failed.status_code == 200, failed.text
+    failed_payload = failed.json()
+    assert failed_payload["validation"]["tool_error"]["tool"] == "run_safe_sql"
+    assert any(call["tool"] == "run_safe_sql" and call["status"] == "error" for call in failed_payload["tool_calls"])

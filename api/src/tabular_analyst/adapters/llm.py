@@ -7,7 +7,7 @@ from tabular_analyst.core.config import Settings
 class AnalystPlanner:
     def plan(self, question: str, profile: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
         lowered = question.lower()
-        if any(term in lowered for term in ["delete", "drop table", "run python", "read local", "open /", "system prompt"]):
+        if any(term in lowered for term in ["delete", "drop table", "run python", "read local", "open /", "system prompt", "overwrite", "export", "install", "copy to"]):
             return {"blocked": True, "reason": "Unsafe or out-of-scope request blocked by governed planner.", "steps": []}
         columns = [col["name"] for col in profile.get("columns", [])]
         numeric_cols = [col["name"] for col in profile.get("columns", []) if col.get("inferred_type") == "numeric"]
@@ -18,7 +18,19 @@ class AnalystPlanner:
             steps.append({"tool": "detect_data_quality_issues", "arguments": {}})
         sql = "SELECT * FROM dataset LIMIT 20"
         chart = None
-        if ("average" in lowered or "mean" in lowered) and numeric_cols:
+        if any(term in lowered for term in ["top", "highest", "largest", "sort"]) and numeric_cols:
+            sort_by = next((col for col in numeric_cols if col.lower() in lowered), numeric_cols[0])
+            limit = 5
+            for candidate in [3, 5, 10]:
+                if str(candidate) in lowered:
+                    limit = candidate
+                    break
+            selected = []
+            if categorical_cols:
+                selected.append(categorical_cols[0])
+            selected.append(sort_by)
+            steps.append({"tool": "run_transform", "arguments": {"select": selected, "sort_by": sort_by, "sort_desc": True, "limit": limit}})
+        elif ("average" in lowered or "mean" in lowered) and numeric_cols:
             y = next((col for col in numeric_cols if col.lower() in lowered), numeric_cols[0])
             group = next((col for col in categorical_cols if col.lower() in lowered), categorical_cols[0] if categorical_cols else columns[0])
             sql = f'SELECT "{group}", AVG("{y}") AS avg_{y.replace(" ", "_")} FROM dataset GROUP BY "{group}" ORDER BY avg_{y.replace(" ", "_")} DESC'
@@ -29,7 +41,8 @@ class AnalystPlanner:
             chart_type = "line" if x in date_cols or x.lower() == "year" else "bar"
             sql = f'SELECT "{x}", "{y}" FROM dataset WHERE "{y}" IS NOT NULL ORDER BY "{x}" LIMIT 200'
             chart = {"chart_type": chart_type, "x": x, "y": y, "title": f"{y} by {x}"}
-        steps.append({"tool": "run_safe_sql", "arguments": {"sql": sql}})
+        if not any(step["tool"] == "run_transform" for step in steps):
+            steps.append({"tool": "run_safe_sql", "arguments": {"sql": sql}})
         if chart:
             steps.append({"tool": "create_chart", "arguments": chart})
         steps.append({"tool": "summarize_result", "arguments": {}})
@@ -101,6 +114,40 @@ def _tool_schemas(columns: list[str]) -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {"sql": {"type": "string"}},
                 "required": ["sql"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+        {
+            "type": "function",
+            "name": "run_transform",
+            "description": "Run a bounded dataframe transformation with optional select, filters, group-by aggregations, sort, and limit. Prefer this for top-N, simple filters, and deterministic tabular transformations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "select": {"type": "array", "items": {"type": "string", "enum": column_enum}},
+                    "filters": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "column": {"type": "string", "enum": column_enum},
+                                "op": {"type": "string", "enum": ["==", "!=", ">", ">=", "<", "<=", "contains"]},
+                                "value": {"type": ["string", "number", "boolean"]},
+                            },
+                            "required": ["column", "op", "value"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "group_by": {"type": "array", "items": {"type": "string", "enum": column_enum}},
+                    "aggregations": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string", "enum": ["sum", "mean", "median", "min", "max", "count"]},
+                    },
+                    "sort_by": {"type": "string", "enum": column_enum},
+                    "sort_desc": {"type": "boolean"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                },
                 "additionalProperties": False,
             },
             "strict": True,

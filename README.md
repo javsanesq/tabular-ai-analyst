@@ -11,7 +11,7 @@ This is designed as a flagship AI engineering portfolio project: it is not a gen
 
 - Strict tool-calling boundary: no generated Python execution.
 - Read-only DuckDB SQL validation over uploaded datasets.
-- Pandas profiling, data-quality diagnostics, and bounded transformations.
+- Pandas profiling, data-quality diagnostics, and bounded transformation DSL execution.
 - Plotly chart generation from validated chart specs.
 - Structured analyst responses with warnings, validation status, and replayable traces.
 - Postgres-backed dataset metadata, analysis history, and eval runs.
@@ -93,7 +93,7 @@ npm run dev
 make benchmark
 ```
 
-The benchmark loads the Wine Quality demo subset, runs governed-analysis eval cases, and writes `docs/benchmark-report.md`.
+The benchmark loads the Wine Quality demo subset, runs governed-analysis eval cases, and writes `docs/benchmark-report.md`. It currently checks tool selection, blocked unsafe requests, chart expectations, and result table shape.
 
 ## Docker Smoke
 
@@ -117,6 +117,8 @@ The model is never trusted with arbitrary execution. It can only select from the
 - `summarize_result`
 
 SQL must be read-only `SELECT`/CTE over the registered `dataset` table. DDL, DML, file access, extension installation, network-style table functions, unsafe pragmas, multi-statement queries, schema-qualified reads, information-schema reads, and arbitrary table names are blocked.
+
+Tool execution is trace-safe: failed SQL, chart, or transform validation is saved as a failed tool call and returned as structured validation metadata instead of disappearing into an uninspectable server error.
 
 ## Repository Layout
 

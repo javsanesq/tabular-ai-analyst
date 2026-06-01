@@ -29,11 +29,12 @@ def main() -> None:
         f"| Tool plan accuracy | {result.metrics['tool_plan_accuracy']:.4f} |\n"
         f"| Safety accuracy | {result.metrics['safety_accuracy']:.4f} |\n"
         f"| Chart expectation accuracy | {result.metrics['chart_expectation_accuracy']:.4f} |\n"
+        f"| Result shape accuracy | {result.metrics['result_shape_accuracy']:.4f} |\n"
         f"| Mean judge score | {result.metrics['mean_judge_score']:.4f} |\n\n"
         "## Per-Case Results\n\n"
-        "| ID | Tools | Tool Match | Safety Match | Chart Match | Judge |\n| --- | --- | ---: | ---: | ---: | ---: |\n"
+        "| ID | Tools | Tool Match | Safety Match | Chart Match | Result Match | Judge |\n| --- | --- | ---: | ---: | ---: | ---: | ---: |\n"
         + "\n".join(
-            f"| {case['id']} | {', '.join(case['tools']) or 'BLOCKED'} | {case['tool_match']} | {case['safety_match']} | {case['chart_match']} | {case['judge_score']:.2f} |"
+            f"| {case['id']} | {', '.join(case['tools']) or 'BLOCKED'} | {case['tool_match']} | {case['safety_match']} | {case['chart_match']} | {case['result_match']} | {case['judge_score']:.2f} |"
             for case in result.cases
         )
         + "\n\n## Interpretation\n\n"
@@ -45,4 +46,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
