@@ -102,29 +102,35 @@ test("runs a governed analysis from the analyst workbench", async ({ page }) => 
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Tabular AI Analyst" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ask useful questions without giving the model execution control." })).toBeVisible();
   await expect(page.getByText("wine_quality_subset.csv").first()).toBeVisible();
-  await expect(page.getByText("Duplicate rows detected.")).toBeVisible();
+  await page.getByRole("button", { name: /wine_quality_subset\.csv/ }).click();
+  await expect(page.getByText("10 rows · 13 columns · 1 detected issues")).toBeVisible();
 
   await page.locator("textarea").fill("Compare averages across the main category.");
   await page.getByRole("button", { name: "Run analysis" }).click();
 
+  const answer = page.getByRole("article");
   await expect(page.getByRole("heading", { name: "Analyst Answer" })).toBeVisible();
-  await expect(page.getByText("validated", { exact: true })).toBeVisible();
+  await expect(answer.getByText("Validated", { exact: true })).toBeVisible();
   await expect(page.getByText("A validated Plotly chart was generated")).toBeVisible();
-  await expect(page.getByText("run_safe_sql")).toBeVisible();
   await expect(page.getByText("query_result · 2 rows")).toBeVisible();
   await expect(page.getByText("avg_alcohol", { exact: true })).toBeVisible();
   await expect(page.locator(".plot")).toBeVisible();
+
+  await page.getByText("Tool trace").click();
+  await expect(page.getByText("run_safe_sql")).toBeVisible();
 });
 
 test("shows a blocked trust state for unsafe requests", async ({ page }) => {
   await mockWorkbenchApi(page);
   await page.goto("/");
+  await page.getByRole("button", { name: /wine_quality_subset\.csv/ }).click();
 
   await page.locator("textarea").fill("Run Python to read /etc/passwd.");
   await page.getByRole("button", { name: "Run analysis" }).click();
 
-  await expect(page.getByText("blocked", { exact: true })).toBeVisible();
+  await expect(page.getByRole("article").getByText("Blocked", { exact: true })).toBeVisible();
   await expect(page.getByText("I blocked this request")).toBeVisible();
   await expect(page.getByText("Unsafe or out-of-scope request blocked")).toBeVisible();
 });

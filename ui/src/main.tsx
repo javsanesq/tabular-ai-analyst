@@ -78,15 +78,22 @@ function App() {
   const loadDatasets = async () => {
     const rows = await api<Dataset[]>("/api/v1/datasets");
     setDatasets(rows);
-    if (!selected && rows[0]) await selectDataset(rows[0].id);
   };
 
   const selectDataset = async (id: string) => {
-    const detail = await api<Dataset>(`/api/v1/datasets/${id}`);
-    setSelected(detail);
-    const history = await api<Analysis[]>(`/api/v1/datasets/${id}/analyses`);
-    setAnalyses(history);
-    setActiveAnalysis(history[0] || null);
+    setBusy(true);
+    setError(null);
+    try {
+      const detail = await api<Dataset>(`/api/v1/datasets/${id}`);
+      const history = await api<Analysis[]>(`/api/v1/datasets/${id}/analyses`);
+      setSelected(detail);
+      setAnalyses(history);
+      setActiveAnalysis(history[0] || null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dataset load failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -146,6 +153,14 @@ function App() {
     }
   };
 
+  const closeDataset = () => {
+    setSelected(null);
+    setActiveAnalysis(null);
+    setAnalyses([]);
+    setError(null);
+    loadDatasets().catch((err) => setError(err.message));
+  };
+
   const profileColumns = selected?.profile?.columns || [];
   const previewColumns = selected?.profile?.preview?.[0] ? Object.keys(selected.profile.preview[0]) : [];
   const trustState = useMemo(() => {
@@ -154,133 +169,193 @@ function App() {
     if (activeAnalysis.validation.sql_safety === "passed") return "validated";
     return "limited";
   }, [activeAnalysis]);
+  const trustLabel = trustState === "waiting" ? "Ready" : trustState === "blocked" ? "Blocked" : trustState === "validated" ? "Validated" : "Limited";
 
   return (
     <main className="app-shell">
-      <aside className="left-rail">
-        <div className="brand-block">
-          <span className="eyebrow">Governed Agent</span>
+      <header className="topbar">
+        <div>
+          <span className="eyebrow">Governed tabular analysis</span>
           <h1>Tabular AI Analyst</h1>
-          <p>Natural-language analysis with bounded tools, validated SQL, chart specs, and replayable traces.</p>
         </div>
-        <label className="token-box">
+        <label className="token-field">
           Demo token
           <input value={token} onChange={(event) => setToken(event.target.value)} />
         </label>
-        <label className="upload-box">
-          <input type="file" accept=".csv,.xlsx" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
-          <span>Upload CSV/XLSX</span>
-        </label>
-        <div className="demo-row">
-          <button disabled={busy} onClick={() => loadDemo("wine-quality")}>Wine demo</button>
-          <button disabled={busy} onClick={() => loadDemo("owid-co2")}>CO2 demo</button>
-        </div>
-        <section>
-          <h2>Datasets</h2>
-          <div className="dataset-list">
-            {datasets.map((dataset) => (
-              <button className={selected?.id === dataset.id ? "selected" : ""} key={dataset.id} onClick={() => selectDataset(dataset.id)}>
-                <strong>{dataset.original_filename}</strong>
-                <span>{dataset.row_count} rows · {dataset.column_count} cols</span>
-              </button>
-            ))}
-          </div>
-        </section>
-        <section>
-          <h2>History</h2>
-          <div className="history-list">
-            {analyses.map((analysis) => (
-              <button key={analysis.id} onClick={() => setActiveAnalysis(analysis)}>{analysis.question}</button>
-            ))}
-          </div>
-        </section>
-      </aside>
+      </header>
 
-      <section className="workspace">
-        <div className="command-strip">
-          <div>
-            <span className={`trust-pill ${trustState}`}>{trustState}</span>
-            <h2>{selected ? selected.original_filename : "Upload a dataset to begin"}</h2>
+      {!selected ? (
+        <section className="start-screen">
+          <div className="start-copy">
+            <span className="eyebrow">Start with data</span>
+            <h1>Ask useful questions without giving the model execution control.</h1>
+            <p>Upload a table or load a demo dataset. The app profiles the data, runs only approved tools, and keeps technical detail out of the way until you ask for it.</p>
           </div>
-          <button disabled={busy || !selected} onClick={() => ask()}>{busy ? "Running..." : "Run analysis"}</button>
-        </div>
-        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask a governed analysis question..." />
-        <div className="prompt-row">
-          {["Show the main data-quality issues.", "Create a chart for the key trend.", "Compare averages across the main category."].map((text) => (
-            <button key={text} disabled={!selected || busy} onClick={() => { setQuestion(text); ask(text); }}>{text}</button>
-          ))}
-        </div>
-        {error && <div className="error">{error}</div>}
-        {activeAnalysis && (
-          <article className="answer-panel">
-            <h3>Analyst Answer</h3>
-            <p>{activeAnalysis.answer}</p>
-            {activeAnalysis.warnings.length > 0 && (
-              <div className="warning-box">
-                {activeAnalysis.warnings.map((warning) => <span key={warning}>{warning}</span>)}
-              </div>
-            )}
-            {activeAnalysis.charts.map((chart, index) => <Plot key={index} figure={chart.figure} />)}
-            {activeAnalysis.tables.map((table) => (
-              <div className="table-wrap" key={table.name}>
-                <h4>{table.name} · {table.row_count} rows</h4>
-                <table>
-                  <thead><tr>{table.columns.map((col) => <th key={col}>{col}</th>)}</tr></thead>
-                  <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
-                </table>
-              </div>
-            ))}
-          </article>
-        )}
-      </section>
 
-      <aside className="inspector">
-        <section className="metric-grid">
-          <div><span>Rows</span><strong>{selected?.row_count ?? "–"}</strong></div>
-          <div><span>Columns</span><strong>{selected?.column_count ?? "–"}</strong></div>
-          <div><span>Issues</span><strong>{selected?.issues?.length ?? "–"}</strong></div>
-          <div><span>Tools</span><strong>{activeAnalysis?.tool_calls.length ?? "–"}</strong></div>
-        </section>
-        <section>
-          <h2>Schema Profile</h2>
-          <div className="column-list">
-            {profileColumns.map((column) => (
-              <div key={column.name}>
-                <strong>{column.name}</strong>
-                <span>{column.inferred_type} · {Math.round(column.missing_pct * 100)}% missing · {column.unique_count} unique</span>
-              </div>
-            ))}
-          </div>
-        </section>
-        <section>
-          <h2>Quality Warnings</h2>
-          <div className="issue-list">
-            {(selected?.issues || []).map((issue, index) => <div className={issue.severity} key={index}>{issue.message}</div>)}
-          </div>
-        </section>
-        <section>
-          <h2>Tool Trace</h2>
-          <div className="trace-list">
-            {(activeAnalysis?.tool_calls || []).map((call, index) => (
-              <details key={`${call.tool}-${index}`} open={index === 0}>
-                <summary>{call.tool}</summary>
-                <pre>{JSON.stringify({ arguments: call.arguments, result: call.result }, null, 2)}</pre>
-              </details>
-            ))}
-          </div>
-        </section>
-        <section>
-          <h2>Preview</h2>
-          {selected?.profile?.preview && (
-            <div className="mini-table">
-              <table>
-                <thead><tr>{previewColumns.slice(0, 4).map((col) => <th key={col}>{col}</th>)}</tr></thead>
-                <tbody>{selected.profile.preview.slice(0, 5).map((row, idx) => <tr key={idx}>{previewColumns.slice(0, 4).map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
-              </table>
+          <div className="start-actions">
+            <div className="primary-actions">
+              <button disabled={busy} onClick={() => loadDemo("wine-quality")}>Load Wine Quality demo</button>
+              <button disabled={busy} onClick={() => loadDemo("owid-co2")}>Load CO2 demo</button>
             </div>
+            <label className="upload-box">
+              <input type="file" accept=".csv,.xlsx" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
+              <span>Upload CSV/XLSX</span>
+              <small>File type, size, rows, and columns are validated before analysis.</small>
+            </label>
+            {error && <div className="error">{error}</div>}
+          </div>
+
+          {datasets.length > 0 && (
+            <section className="recent-datasets">
+              <div>
+                <span className="eyebrow">Recent datasets</span>
+                <h2>Continue where you left off</h2>
+              </div>
+              <div className="dataset-list">
+                {datasets.map((dataset) => (
+                  <button key={dataset.id} onClick={() => selectDataset(dataset.id)}>
+                    <strong>{dataset.original_filename}</strong>
+                    <span>{dataset.row_count} rows · {dataset.column_count} columns</span>
+                  </button>
+                ))}
+              </div>
+            </section>
           )}
         </section>
-      </aside>
+      ) : (
+        <section className="analysis-screen">
+          <div className="dataset-bar">
+            <div>
+              <span className={`trust-pill ${trustState}`}>{trustLabel}</span>
+              <h1>{selected.original_filename}</h1>
+              <p>{selected.row_count} rows · {selected.column_count} columns · {selected.issues?.length ?? 0} detected issues</p>
+            </div>
+            <button className="secondary-action" onClick={closeDataset}>Change dataset</button>
+          </div>
+
+          <div className="question-panel">
+            <label htmlFor="question-input">What do you want to know?</label>
+            <textarea
+              id="question-input"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="Ask a governed analysis question..."
+            />
+            <div className="action-row">
+              <button disabled={busy} onClick={() => ask()}>{busy ? "Running analysis..." : "Run analysis"}</button>
+              <span>The backend validates every tool call before execution.</span>
+            </div>
+            <div className="prompt-row">
+              {["Show the main data-quality issues.", "Create a chart for the key trend.", "Compare averages across the main category."].map((text) => (
+                <button key={text} disabled={busy} onClick={() => { setQuestion(text); ask(text); }}>{text}</button>
+              ))}
+            </div>
+            {error && <div className="error">{error}</div>}
+          </div>
+
+          {activeAnalysis ? (
+            <article className="answer-panel">
+              <div className="answer-heading">
+                <div>
+                  <span className="eyebrow">Answer</span>
+                  <h2>Analyst Answer</h2>
+                </div>
+                <span className={`trust-pill ${trustState}`}>{trustLabel}</span>
+              </div>
+              <p>{activeAnalysis.answer}</p>
+              {activeAnalysis.warnings.length > 0 && (
+                <div className="warning-box">
+                  {activeAnalysis.warnings.slice(0, 3).map((warning) => <span key={warning}>{warning}</span>)}
+                </div>
+              )}
+              {activeAnalysis.charts.map((chart, index) => (
+                <section className="chart-result" key={index}>
+                  <h3>{chart.spec.title}</h3>
+                  <Plot figure={chart.figure} />
+                </section>
+              ))}
+              {activeAnalysis.tables.map((table) => (
+                <div className="table-wrap" key={table.name}>
+                  <h3>{table.name} · {table.row_count} rows</h3>
+                  <table>
+                    <thead><tr>{table.columns.map((col) => <th key={col}>{col}</th>)}</tr></thead>
+                    <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
+                  </table>
+                </div>
+              ))}
+            </article>
+          ) : (
+            <section className="empty-answer">
+              <span className="eyebrow">Ready</span>
+              <h2>Run your first governed analysis.</h2>
+              <p>Start with one of the suggested questions or write your own. Tool traces, schema details, and previews stay hidden unless you open them.</p>
+            </section>
+          )}
+
+          <section className="details-grid">
+            <details>
+              <summary>Dataset profile</summary>
+              <div className="metric-grid">
+                <div><span>Rows</span><strong>{selected.row_count}</strong></div>
+                <div><span>Columns</span><strong>{selected.column_count}</strong></div>
+                <div><span>Issues</span><strong>{selected.issues?.length ?? 0}</strong></div>
+                <div><span>Analyses</span><strong>{analyses.length}</strong></div>
+              </div>
+              <div className="column-list">
+                {profileColumns.map((column) => (
+                  <div key={column.name}>
+                    <strong>{column.name}</strong>
+                    <span>{column.inferred_type} · {Math.round(column.missing_pct * 100)}% missing · {column.unique_count} unique</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+
+            <details>
+              <summary>Quality warnings</summary>
+              <div className="issue-list">
+                {(selected.issues || []).map((issue, index) => <div className={issue.severity} key={index}>{issue.message}</div>)}
+                {(selected.issues || []).length === 0 && <p>No quality warnings detected in the current profile.</p>}
+              </div>
+            </details>
+
+            <details>
+              <summary>History</summary>
+              <div className="history-list">
+                {analyses.map((analysis) => (
+                  <button key={analysis.id} onClick={() => setActiveAnalysis(analysis)}>{analysis.question}</button>
+                ))}
+                {analyses.length === 0 && <p>No saved analyses yet.</p>}
+              </div>
+            </details>
+
+            <details>
+              <summary>Tool trace</summary>
+              <div className="trace-list">
+                {(activeAnalysis?.tool_calls || []).map((call, index) => (
+                  <details key={`${call.tool}-${index}`}>
+                    <summary>{call.tool}</summary>
+                    <pre>{JSON.stringify({ arguments: call.arguments, result: call.result }, null, 2)}</pre>
+                  </details>
+                ))}
+                {!activeAnalysis && <p>Run an analysis to inspect validated tool calls.</p>}
+              </div>
+            </details>
+
+            <details>
+              <summary>Preview</summary>
+              {selected.profile?.preview && (
+                <div className="mini-table">
+                  <table>
+                    <thead><tr>{previewColumns.slice(0, 5).map((col) => <th key={col}>{col}</th>)}</tr></thead>
+                    <tbody>{selected.profile.preview.slice(0, 5).map((row, idx) => <tr key={idx}>{previewColumns.slice(0, 5).map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
+                  </table>
+                </div>
+              )}
+            </details>
+          </section>
+        </section>
+      )}
     </main>
   );
 }
