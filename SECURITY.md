@@ -22,4 +22,6 @@ Tool failures are returned as structured validation metadata and saved in the an
 
 ## Hosted Demo Controls
 
-The hosted demo should require a shared demo token and enforce request quotas. Do not expose unrestricted OpenAI-backed analysis endpoints publicly.
+The hosted demo should require a shared demo token and enforce request quotas. Demo quota events are stored in the database using hashed identity keys, not raw tokens. Do not expose unrestricted OpenAI-backed analysis endpoints publicly.
+
+The eval API accepts only curated benchmark IDs from the repository eval allowlist. It must not be used as a user-controlled server-side file reader.

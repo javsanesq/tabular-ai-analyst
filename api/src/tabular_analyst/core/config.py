@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
     database_url: str = Field(default="sqlite+pysqlite:///:memory:", alias="DATABASE_URL")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
+    ui_dist_dir: Path = Field(default=Path("ui/dist"), alias="UI_DIST_DIR")
     api_auth_token: str | None = Field(default=None, alias="API_AUTH_TOKEN")
     demo_daily_request_limit: int = Field(default=100, alias="DEMO_DAILY_REQUEST_LIMIT")
     max_upload_mb: int = Field(default=25, alias="MAX_UPLOAD_MB")
@@ -49,4 +50,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

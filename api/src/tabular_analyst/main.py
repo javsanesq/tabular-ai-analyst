@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from tabular_analyst.api import analyses, datasets, evals, health
 from tabular_analyst.core.config import get_settings
@@ -30,4 +31,5 @@ app.include_router(health.router)
 app.include_router(datasets.router)
 app.include_router(analyses.router)
 app.include_router(evals.router)
-
+if settings.ui_dist_dir.exists():
+    app.mount("/", StaticFiles(directory=settings.ui_dist_dir, html=True), name="ui")

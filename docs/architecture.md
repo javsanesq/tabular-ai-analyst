@@ -29,7 +29,8 @@ Tool execution is intentionally trace-safe. When a governed tool fails validatio
 - `datasets`: upload metadata, profile JSON, quality issues, file pointer.
 - `analyses`: user question, final answer, tool calls, warnings, validation state, replayable trace.
 - `eval_runs`: benchmark metrics and per-case results.
+- `demo_quota_events`: hashed demo identity events used to enforce public-demo request limits.
 
 ## Deployment
 
-Local development uses Docker Compose with Postgres, FastAPI, and nginx-served React. Fly.io deployment uses `fly.toml`, a mounted data volume, runtime secrets, and an attached Postgres database.
+Local development uses Docker Compose with Postgres, FastAPI, and nginx-served React. The Fly.io image is single-app: the API Dockerfile builds the React workbench, copies `ui/dist` into the FastAPI image, and serves the UI at `/` while keeping API routes under `/api/v1/*`. Fly.io deployment uses `fly.toml`, a mounted data volume, runtime secrets, and an attached Postgres database.

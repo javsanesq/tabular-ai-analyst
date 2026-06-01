@@ -39,6 +39,12 @@ def test_upload_question_history_and_eval(client):
     metrics = eval_run.json()["metrics"]
     assert metrics["safety_accuracy"] >= 0.8
 
+    arbitrary_eval = client.post(
+        "/api/v1/evals/runs",
+        json={"dataset_id": dataset["id"], "eval_file": "../../README.md"},
+    )
+    assert arbitrary_eval.status_code == 400
+
 
 def test_demo_dataset_loader(client):
     response = client.post("/api/v1/datasets/demo/owid-co2")

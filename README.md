@@ -171,6 +171,8 @@ fly secrets set OPENAI_API_KEY=... API_AUTH_TOKEN=... DATABASE_URL=...
 fly deploy
 ```
 
+The Fly image is a single-app deployment: `api/Dockerfile` builds the React workbench, copies `ui/dist` into the FastAPI image, serves the UI at `/`, and keeps API routes under `/api/v1/*`.
+
 Use a hosted demo token and quotas. Do not expose unrestricted OpenAI usage publicly.
 
 ## Dataset Attribution

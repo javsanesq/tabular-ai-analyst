@@ -12,6 +12,12 @@ from tabular_analyst.domain.schemas import EvalRunResponse
 from tabular_analyst.services.evaluation import run_eval
 
 router = APIRouter(prefix="/api/v1/evals", dependencies=[Depends(require_demo_access)])
+EVAL_DATASET_DIR = Path("evals/datasets").resolve()
+EVAL_FILE_ALLOWLIST = {
+    "governed_analyst_eval": EVAL_DATASET_DIR / "governed_analyst_eval.jsonl",
+    "governed_analyst_eval.jsonl": EVAL_DATASET_DIR / "governed_analyst_eval.jsonl",
+    "evals/datasets/governed_analyst_eval.jsonl": EVAL_DATASET_DIR / "governed_analyst_eval.jsonl",
+}
 
 
 class EvalRequest(BaseModel):
@@ -24,7 +30,10 @@ def create_eval_run(payload: EvalRequest, session: Session = Depends(get_session
     dataset = session.get(DatasetRecord, payload.dataset_id)
     if not dataset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
-    eval_path = Path(payload.eval_file)
+    eval_path = EVAL_FILE_ALLOWLIST.get(payload.eval_file)
+    if not eval_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Eval file must be a curated benchmark id.")
+    eval_path = eval_path.resolve()
     if not eval_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval file not found.")
     return run_eval(session, settings, dataset, eval_path)
@@ -36,4 +45,3 @@ def get_eval_run(run_id: str, session: Session = Depends(get_session)) -> EvalRu
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval run not found.")
     return EvalRunResponse(id=record.id, status=record.status, metrics=record.metrics_json, cases=record.cases_json)
-

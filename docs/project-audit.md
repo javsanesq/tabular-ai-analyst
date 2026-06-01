@@ -4,6 +4,21 @@ Audit date: 2026-06-01
 Audited commit: `8cdbfc5`
 Repository: `javsanesq/tabular-ai-analyst`
 
+## Follow-Up Progress
+
+Follow-up date: 2026-06-01
+
+The highest-leverage gaps from this audit have started moving from assessment to implementation:
+
+- The Fly deployment path now uses a single API image that builds and serves the React workbench from FastAPI.
+- The eval endpoint now accepts only curated benchmark IDs instead of arbitrary server-side paths.
+- Demo quotas now persist in the database as hashed identity events rather than process-local memory.
+- Frontend E2E coverage now includes governed analysis, unsafe-request trust state, chart rendering, and invalid-token error handling.
+- Docker smoke now passes against the single API image serving both `/` and `/api/v1/*`.
+- The local DOCX study guide remains outside the repository and `.docx` files are ignored to avoid accidentally committing private study material.
+
+Remaining P1 gate: run a live OpenAI smoke with `OPENAI_API_KEY` exported locally and then complete the actual Fly deployment smoke against the public URL.
+
 ## Executive Assessment
 
 Tabular AI Analyst is a strong flagship CV project and substantially above an average local demo. It demonstrates a credible AI engineering idea: the LLM plans analysis, but execution is constrained to backend-owned tools with validation, trace persistence, SQL safety, chart validation, benchmarks, CI, Docker, and a polished React workbench.
@@ -57,6 +72,8 @@ OPENAI_API_KEY=... \
 
 Location: `fly.toml:4-5`, `docs/deployment.md:80`, `docs/deployment.md:97-103`
 
+Follow-up status: addressed in code by building and serving the React workbench from the FastAPI image. Still needs live Fly smoke before advertising a public URL.
+
 The Fly configuration builds only `api/Dockerfile`, so Fly deployment currently exposes the API but not the React workbench. The deployment runbook documents this honestly, but it means the project should not yet be advertised as a public hosted app.
 
 Impact: portfolio viewers cannot experience the full product from one public URL; implementation story is incomplete.
@@ -77,6 +94,8 @@ Recommended fix: export a real key locally and run `scripts/smoke_openai_planner
 
 Location: `api/src/tabular_analyst/api/evals.py:17-30`
 
+Follow-up status: addressed by replacing arbitrary path selection with a curated benchmark allowlist.
+
 `EvalRequest.eval_file` is user-controlled and converted directly into `Path(payload.eval_file)`. Auth is required, but a shared demo token is not sufficient authorization for arbitrary server-side file selection.
 
 Impact: a token holder can make the process attempt to parse any readable server-side path as JSONL, causing information exposure through errors or unnecessary resource use.
@@ -86,6 +105,8 @@ Recommended fix: replace `eval_file` with a controlled enum or resolve the path 
 ### P2: Demo quotas are in-memory and process-local
 
 Location: `api/src/tabular_analyst/core/security.py:7-30`
+
+Follow-up status: addressed by persisting hashed demo quota events in the database. Remaining production improvement: add cleanup/index monitoring and stronger user identity than shared-token plus IP.
 
 The quota implementation works for a single-process demo, but it resets on restart and does not coordinate across workers or machines.
 
@@ -136,6 +157,8 @@ Recommended fix: add a runtime `window.__TABULAR_API_BASE_URL__` or Vite public 
 ### P2: Frontend test coverage is still shallow
 
 Location: `ui/tests/workbench.spec.ts:87-103`
+
+Follow-up status: partially improved with E2E coverage for governed analysis, visible chart output, blocked unsafe requests, and invalid-token errors. Upload, history replay, quota exhaustion, and mobile layout tests remain open.
 
 There is one good E2E path, but no upload test, auth failure test, quota/error state test, blocked unsafe request UI test, chart rendering assertion, mobile layout test, or history replay test.
 

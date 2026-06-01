@@ -1,11 +1,14 @@
 .git
 .venv
 node_modules
+**/node_modules
 data
 output
 .env
 .env.*
 __pycache__
 .pytest_cache
+playwright-report
+test-results
 ui/dist
-
+**/dist

@@ -77,7 +77,12 @@ fly status
 fly logs
 ```
 
-The API Docker image runs the FastAPI app and serves `/health/ready` for health checks. The current `fly.toml` deploys the API only; the React workbench is Docker Compose-ready locally and should be deployed separately or folded into the API image before a single public demo URL is announced.
+The API Docker image is a multi-stage build. It first builds the React workbench with Vite, then copies `ui/dist` into the FastAPI runtime image and serves it from `/` when `UI_DIST_DIR` exists. The same Fly app therefore exposes both:
+
+- React workbench at `/`.
+- FastAPI routes under `/api/v1/*` plus health checks under `/health/*`.
+
+Docker Compose still includes a separate `ui` service for local development parity and nginx proxy testing.
 
 ## Hosted Smoke
 
@@ -90,14 +95,17 @@ scripts/smoke_docker.sh
 Expected result:
 
 - Readiness returns `{"status":"ready"}`.
+- The workbench HTML is served at the root URL.
 - Wine Quality demo dataset loads.
 - A governed chart analysis succeeds.
 - An unsafe Python/file-access request is blocked or safely rejected.
 
-## Known Deployment Gap
+## Public Demo Gate
 
-The backend is Fly-ready, but the public portfolio demo should not be advertised until one of these frontend hosting paths is completed:
+Do not advertise the public demo URL until all smoke checks pass against the Fly URL:
 
-- Serve the built React UI from the FastAPI container.
-- Deploy the UI as a separate static/nginx Fly app that proxies `/api` to the API app.
-- Deploy the UI on a static host and configure `CORS_ORIGINS` plus API base URL handling.
+- `GET /health/ready` returns ready.
+- `GET /` returns the React workbench HTML.
+- `scripts/smoke_docker.sh` succeeds with the hosted `BASE_URL`.
+- The demo token is required for API calls.
+- A live OpenAI smoke has been run from a local shell with `OPENAI_API_KEY` exported and `--require-key`.

@@ -49,3 +49,10 @@ class EvalRunRecord(Base):
     cases_json: Mapped[list] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+class DemoQuotaRecord(Base):
+    __tablename__ = "demo_quota_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    identity_hash: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

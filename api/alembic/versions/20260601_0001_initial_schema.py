@@ -49,10 +49,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
 
-
 def downgrade() -> None:
     op.drop_table("eval_runs")
     op.drop_index("ix_analyses_dataset_id", table_name="analyses")
     op.drop_table("analyses")
     op.drop_table("datasets")
-

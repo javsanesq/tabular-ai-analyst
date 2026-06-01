@@ -13,6 +13,7 @@ test-results/
 build/
 data/
 output/
+*.docx
 *.db
 *.sqlite
 *.pyc
