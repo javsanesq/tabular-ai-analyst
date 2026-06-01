@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: install test api db-upgrade db-revision docker-up docker-down docker-config benchmark ui-build lint
+.PHONY: install test api db-upgrade db-revision docker-up docker-down docker-config benchmark ui-build lint smoke-e2e
 
 install:
 	cd api && $(PYTHON) -m pip install -e .[dev]
@@ -37,3 +37,5 @@ lint:
 	cd api && $(PYTHON) -m compileall src
 	cd ui && npm run typecheck
 
+smoke-e2e:
+	scripts/smoke_docker.sh

@@ -15,6 +15,11 @@ from tabular_analyst.services.profiling import detect_quality_issues, profile_da
 
 router = APIRouter(prefix="/api/v1/datasets", dependencies=[Depends(require_demo_access)])
 
+DEMO_DATASETS = {
+    "wine-quality": Path("samples/wine_quality_subset.csv"),
+    "owid-co2": Path("samples/owid_co2_subset.csv"),
+}
+
 
 def _summary(record: DatasetRecord) -> DatasetSummary:
     return DatasetSummary(
@@ -46,6 +51,47 @@ async def upload_dataset(
         profile_json=profile,
         issues_json=issues,
     )
+    session.add(record)
+    session.commit()
+    return DatasetDetail(**_summary(record).model_dump(), profile=profile, issues=issues)
+
+
+@router.post("/demo/{demo_name}", response_model=DatasetDetail)
+def load_demo_dataset(
+    demo_name: str,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> DatasetDetail:
+    sample_path = DEMO_DATASETS.get(demo_name)
+    if not sample_path or not sample_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo dataset not found.")
+    dataset_id = sample_path.stem.replace("_subset", "")
+    stored_path = settings.upload_dir / f"demo-{dataset_id}.csv"
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    stored_path.write_bytes(sample_path.read_bytes())
+    df = read_dataframe(stored_path, settings)
+    profile = profile_dataframe(df)
+    issues = detect_quality_issues(df)
+    record = DatasetRecord(
+        id=f"demo-{dataset_id}",
+        stored_filename=stored_path.name,
+        original_filename=sample_path.name,
+        content_type="text/csv",
+        row_count=len(df),
+        column_count=len(df.columns),
+        profile_json=profile,
+        issues_json=issues,
+    )
+    existing = session.get(DatasetRecord, record.id)
+    if existing:
+        existing.row_count = record.row_count
+        existing.column_count = record.column_count
+        existing.profile_json = profile
+        existing.issues_json = issues
+        existing.stored_filename = stored_path.name
+        existing.original_filename = sample_path.name
+        session.commit()
+        return DatasetDetail(**_summary(existing).model_dump(), profile=profile, issues=issues)
     session.add(record)
     session.commit()
     return DatasetDetail(**_summary(record).model_dump(), profile=profile, issues=issues)
@@ -90,4 +136,3 @@ def ask_question(
 def list_analyses(dataset_id: str, session: Session = Depends(get_session)) -> list[dict]:
     records = session.scalars(select(AnalysisRecord).where(AnalysisRecord.dataset_id == dataset_id).order_by(AnalysisRecord.created_at.desc())).all()
     return [{"id": row.id, "question": row.question, "created_at": row.created_at.isoformat(), **row.answer_json} for row in records]
-

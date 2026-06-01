@@ -61,6 +61,19 @@ section h2 { margin: 24px 0 10px; text-transform: uppercase; letter-spacing: 0.1
   font-weight: 800;
 }
 .upload-box input { display: none; }
+.demo-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.demo-row button {
+  background: #20342a;
+  color: white;
+  border-radius: 14px;
+  padding: 11px 10px;
+  font-weight: 800;
+}
 
 .dataset-list, .history-list, .column-list, .issue-list, .trace-list { display: grid; gap: 10px; }
 .dataset-list button, .history-list button {
@@ -160,4 +173,3 @@ pre { white-space: pre-wrap; font-size: 11px; color: #33443a; }
   .left-rail, .inspector { border: 0; }
   .command-strip { flex-direction: column; }
 }
-

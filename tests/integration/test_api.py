@@ -36,3 +36,11 @@ def test_upload_question_history_and_eval(client):
     metrics = eval_run.json()["metrics"]
     assert metrics["safety_accuracy"] >= 0.8
 
+
+def test_demo_dataset_loader(client):
+    response = client.post("/api/v1/datasets/demo/owid-co2")
+    assert response.status_code == 200, response.text
+    dataset = response.json()
+    assert dataset["id"] == "demo-owid_co2"
+    assert dataset["row_count"] == 15
+    assert any(column["name"] == "co2" for column in dataset["profile"]["columns"])

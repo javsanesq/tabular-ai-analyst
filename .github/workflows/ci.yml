@@ -37,4 +37,6 @@ jobs:
           npm install
           npm run build
       - name: Deployment config
-        run: docker compose config >/tmp/tabular-compose.yml
+        run: |
+          bash -n scripts/smoke_docker.sh
+          docker compose config >/tmp/tabular-compose.yml

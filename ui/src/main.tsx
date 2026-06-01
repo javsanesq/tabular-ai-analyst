@@ -108,6 +108,20 @@ function App() {
     }
   };
 
+  const loadDemo = async (name: "wine-quality" | "owid-co2") => {
+    setBusy(true);
+    setError(null);
+    try {
+      const detail = await api<Dataset>(`/api/v1/datasets/demo/${name}`, { method: "POST" });
+      await loadDatasets();
+      await selectDataset(detail.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Demo load failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const ask = async (text = question) => {
     if (!selected) return;
     setBusy(true);
@@ -152,6 +166,10 @@ function App() {
           <input type="file" accept=".csv,.xlsx" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
           <span>Upload CSV/XLSX</span>
         </label>
+        <div className="demo-row">
+          <button disabled={busy} onClick={() => loadDemo("wine-quality")}>Wine demo</button>
+          <button disabled={busy} onClick={() => loadDemo("owid-co2")}>CO2 demo</button>
+        </div>
         <section>
           <h2>Datasets</h2>
           <div className="dataset-list">
@@ -263,4 +281,3 @@ function App() {
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
-

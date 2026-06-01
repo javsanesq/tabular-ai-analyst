@@ -1,6 +1,7 @@
 # Tabular AI Analyst
 
 [![CI](https://github.com/javsanesq/tabular-ai-analyst/actions/workflows/ci.yml/badge.svg)](https://github.com/javsanesq/tabular-ai-analyst/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Governed AI analyst copilot for tabular data. Users upload CSV/XLSX files, ask questions in natural language, and receive validated tables, Plotly charts, data-quality warnings, and replayable tool traces.
 
@@ -54,6 +55,20 @@ Authorization: Bearer <token>
 
 The React UI includes a demo-token field.
 
+## Demo Datasets
+
+The UI can load two built-in demo subsets without manually uploading files:
+
+- Wine Quality: useful for averages, grouping, quality checks, and duplicate detection.
+- OWID CO2: useful for trend charts and country comparisons.
+
+API equivalent:
+
+```bash
+curl -H "x-demo-key: change-me-demo-token" -X POST \
+  http://localhost:8000/api/v1/datasets/demo/wine-quality
+```
+
 ## Local Development
 
 ```bash
@@ -79,6 +94,16 @@ make benchmark
 ```
 
 The benchmark loads the Wine Quality demo subset, runs governed-analysis eval cases, and writes `docs/benchmark-report.md`.
+
+## Docker Smoke
+
+After `docker compose up --build` is running:
+
+```bash
+make smoke-e2e
+```
+
+The smoke script checks readiness, loads a demo dataset, runs a chart-producing governed analysis, and verifies unsafe Python/file-access requests are blocked.
 
 ## Safety Model
 
@@ -124,4 +149,3 @@ Use a hosted demo token and quotas. Do not expose unrestricted OpenAI usage publ
 - Wine Quality subset adapted from UCI Machine Learning Repository, Cortez et al., CC BY 4.0.
 
 See `samples/README.md`.
-
