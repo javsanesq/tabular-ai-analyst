@@ -38,7 +38,7 @@ def main() -> None:
             for case in result.cases
         )
         + "\n\n## Interpretation\n\n"
-        "The benchmark is intentionally small but covers the failure modes that make this project different from a generic chatbot: bounded tools, SQL safety, chart validation, and refusal of unsafe requests.\n",
+        "The benchmark covers the failure modes that make this project different from a generic chatbot: bounded tools, SQL safety, chart validation, result-shape checks, and refusal of unsafe requests. The current deterministic suite is broad enough for CI smoke coverage; the next evaluation upgrade is to add qualitative LLM-judge scoring with real OpenAI credentials.\n",
         encoding="utf-8",
     )
     print(report.read_text())

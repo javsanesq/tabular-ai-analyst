@@ -27,18 +27,30 @@ jobs:
           PYTHONPATH: "api/src"
           APP_ENV: "test"
           DATABASE_URL: "sqlite+pysqlite:///:memory:"
+          DATA_DIR: "data/test"
         run: pytest -q
       - name: Benchmark smoke
         env:
           PYTHONPATH: "api/src"
           APP_ENV: "test"
           DATABASE_URL: "sqlite+pysqlite:///:memory:"
+          DATA_DIR: "data/benchmark"
         run: python scripts/run_benchmark.py
+      - name: OpenAI planner smoke
+        env:
+          PYTHONPATH: "api/src"
+          DATA_DIR: "data/openai-smoke"
+        run: python scripts/smoke_openai_planner.py
       - name: Frontend build
         run: |
           cd ui
           npm install
           npm run build
+      - name: Frontend E2E
+        run: |
+          cd ui
+          npx playwright install --with-deps chromium
+          npm run test:e2e
       - name: Deployment config
         run: |
           bash -n scripts/smoke_docker.sh

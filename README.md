@@ -7,6 +7,8 @@ Governed AI analyst copilot for tabular data. Users upload CSV/XLSX files, ask q
 
 This is designed as a flagship AI engineering portfolio project: it is not a generic chatbot over spreadsheets. The model plans analysis, but the backend owns every executable action.
 
+![Analyst workbench screenshot](docs/assets/workbench-demo.png)
+
 ## What It Demonstrates
 
 - Strict tool-calling boundary: no generated Python execution.
@@ -113,6 +115,24 @@ make smoke-e2e
 
 The smoke script checks readiness, loads a demo dataset, runs a chart-producing governed analysis, and verifies unsafe Python/file-access requests are blocked.
 
+## Live OpenAI Smoke
+
+The CI-safe command below skips when `OPENAI_API_KEY` is missing:
+
+```bash
+PYTHON=.venv/bin/python make smoke-openai
+```
+
+To force a real-key validation:
+
+```bash
+PYTHONPATH=api/src DATA_DIR=data/openai-smoke \
+OPENAI_API_KEY=... \
+.venv/bin/python scripts/smoke_openai_planner.py --require-key
+```
+
+This validates the OpenAI planner path against the Wine Quality sample, checks that a normal analysis produces governed tool calls, and verifies that an unsafe request is blocked or safely rejected.
+
 ## Safety Model
 
 The model is never trusted with arbitrary execution. It can only select from these backend tools:
@@ -159,3 +179,10 @@ Use a hosted demo token and quotas. Do not expose unrestricted OpenAI usage publ
 - Wine Quality subset adapted from UCI Machine Learning Repository, Cortez et al., CC BY 4.0.
 
 See `samples/README.md`.
+
+## Further Documentation
+
+- [Architecture](docs/architecture.md)
+- [Benchmark report](docs/benchmark-report.md)
+- [Deployment runbook](docs/deployment.md)
+- [Security posture](SECURITY.md)
