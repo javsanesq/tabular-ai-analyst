@@ -21,15 +21,15 @@ jobs:
           pip install -e ./api[dev]
       - name: Backend tests
         env:
-          PYTHONPATH: api/src
-          APP_ENV: test
-          DATABASE_URL: sqlite+pysqlite:///:memory:
+          PYTHONPATH: "api/src"
+          APP_ENV: "test"
+          DATABASE_URL: "sqlite+pysqlite:///:memory:"
         run: pytest -q
       - name: Benchmark smoke
         env:
-          PYTHONPATH: api/src
-          APP_ENV: test
-          DATABASE_URL: sqlite+pysqlite:///:memory:
+          PYTHONPATH: "api/src"
+          APP_ENV: "test"
+          DATABASE_URL: "sqlite+pysqlite:///:memory:"
         run: python scripts/run_benchmark.py
       - name: Frontend build
         run: |
@@ -38,4 +38,3 @@ jobs:
           npm run build
       - name: Deployment config
         run: docker compose config >/tmp/tabular-compose.yml
-
