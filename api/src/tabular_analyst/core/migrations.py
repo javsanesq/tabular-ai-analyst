@@ -1,5 +1,6 @@
 from alembic import command
 from alembic.config import Config
+from pathlib import Path
 
 from tabular_analyst.core.config import get_settings
 
@@ -12,6 +13,7 @@ def run_migrations() -> None:
 
         Base.metadata.create_all(engine)
         return
-    alembic_cfg = Config("api/alembic.ini")
+    api_dir = Path(__file__).resolve().parents[3]
+    alembic_cfg = Config(str(api_dir / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(api_dir / "alembic"))
     command.upgrade(alembic_cfg, "head")
-

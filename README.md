@@ -42,6 +42,14 @@ Open:
 - API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 - Health: [http://localhost:8000/health/ready](http://localhost:8000/health/ready)
 
+If another project already uses these ports, override the host bindings:
+
+```bash
+API_PORT=8010 UI_PORT=3010 POSTGRES_PORT=55432 docker compose up --build
+```
+
+Then open `http://localhost:3010` and use `BASE_URL=http://localhost:8010 make smoke-e2e`.
+
 The default `.env.example` uses `LLM_PROVIDER=mock` for deterministic local demos. Set `LLM_PROVIDER=openai` and `OPENAI_API_KEY=...` for real OpenAI-backed planning. Production rejects mock mode.
 
 ## Demo Token

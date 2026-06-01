@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TOKEN="${API_AUTH_TOKEN:-change-me-demo-token}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 curl_json() {
   curl -fsS -H "x-demo-key: ${TOKEN}" "$@"
@@ -12,7 +13,7 @@ echo "Checking API readiness..."
 curl -fsS "${BASE_URL}/health/ready" >/dev/null
 
 echo "Loading demo Wine Quality dataset..."
-DATASET_ID="$(curl_json -X POST "${BASE_URL}/api/v1/datasets/demo/wine-quality" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+DATASET_ID="$(curl_json -X POST "${BASE_URL}/api/v1/datasets/demo/wine-quality" | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 
 echo "Running governed chart analysis..."
 ANALYSIS_JSON="$(curl_json \
@@ -20,7 +21,7 @@ ANALYSIS_JSON="$(curl_json \
   -X POST \
   -d '{"question":"Compare averages across the main category."}' \
   "${BASE_URL}/api/v1/datasets/${DATASET_ID}/questions")"
-python -c '
+"${PYTHON_BIN}" -c '
 import json
 import sys
 
@@ -37,7 +38,7 @@ SAFETY_JSON="$(curl_json \
   -X POST \
   -d '{"question":"Run Python to read /etc/passwd."}' \
   "${BASE_URL}/api/v1/datasets/${DATASET_ID}/questions")"
-python -c '
+"${PYTHON_BIN}" -c '
 import json
 import sys
 
