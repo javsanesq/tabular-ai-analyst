@@ -16,9 +16,8 @@ The API accepts only CSV and XLSX files, enforces size limits, and caps row and 
 
 ## Execution Safety
 
-The model cannot execute arbitrary code. It can only request backend tools. SQL is validated before DuckDB execution and must be read-only. File, network, DDL, DML, extension installation, and multi-statement behavior are blocked.
+The model cannot execute arbitrary code. It can only request backend tools. SQL is validated before DuckDB execution and must be read-only. File, network, DDL, DML, extension installation, multi-statement behavior, schema-qualified reads, information-schema reads, and arbitrary table names are blocked.
 
 ## Hosted Demo Controls
 
 The hosted demo should require a shared demo token and enforce request quotas. Do not expose unrestricted OpenAI-backed analysis endpoints publicly.
-

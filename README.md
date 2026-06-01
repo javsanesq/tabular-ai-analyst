@@ -116,7 +116,7 @@ The model is never trusted with arbitrary execution. It can only select from the
 - `create_chart`
 - `summarize_result`
 
-SQL must be read-only `SELECT`/CTE. DDL, DML, file access, extension installation, network-style table functions, unsafe pragmas, and multi-statement queries are blocked.
+SQL must be read-only `SELECT`/CTE over the registered `dataset` table. DDL, DML, file access, extension installation, network-style table functions, unsafe pragmas, multi-statement queries, schema-qualified reads, information-schema reads, and arbitrary table names are blocked.
 
 ## Repository Layout
 

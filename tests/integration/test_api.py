@@ -1,4 +1,7 @@
+from io import BytesIO
 from pathlib import Path
+
+import pandas as pd
 
 
 def test_upload_question_history_and_eval(client):
@@ -44,3 +47,17 @@ def test_demo_dataset_loader(client):
     assert dataset["id"] == "demo-owid_co2"
     assert dataset["row_count"] == 15
     assert any(column["name"] == "co2" for column in dataset["profile"]["columns"])
+
+
+def test_xlsx_upload_is_supported(client):
+    payload = BytesIO()
+    pd.DataFrame({"segment": ["a", "b"], "revenue": [10, 20]}).to_excel(payload, index=False)
+    payload.seek(0)
+    response = client.post(
+        "/api/v1/datasets/upload",
+        files={"file": ("segments.xlsx", payload, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 200, response.text
+    dataset = response.json()
+    assert dataset["row_count"] == 2
+    assert any(column["name"] == "revenue" and column["inferred_type"] == "numeric" for column in dataset["profile"]["columns"])

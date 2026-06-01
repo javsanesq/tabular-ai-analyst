@@ -9,12 +9,20 @@ def test_select_query_is_allowed():
     assert validate_readonly_sql("select country, co2 from dataset") == "select country, co2 from dataset"
 
 
+def test_cte_over_dataset_is_allowed():
+    sql = 'with ranked as (select country, co2 from dataset) select country from ranked'
+    assert validate_readonly_sql(sql) == sql
+
+
 @pytest.mark.parametrize("sql", [
     "delete from dataset",
     "select * from dataset; drop table dataset",
     "copy dataset to '/tmp/out.csv'",
     "select * from read_csv('/etc/passwd')",
     "pragma show_tables",
+    "select * from information_schema.tables",
+    "select * from other_table",
+    "select * from main.dataset",
 ])
 def test_unsafe_sql_is_blocked(sql):
     with pytest.raises(HTTPException):
@@ -26,4 +34,3 @@ def test_safe_sql_runs_with_limit():
     result = run_safe_sql(df, 'select country, co2 from dataset order by co2 desc')
     assert result["row_count"] == 2
     assert result["rows"][0]["country"] == "France"
-

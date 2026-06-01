@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import Plotly from "plotly.js-dist-min";
 import "./styles.css";
 
 type Dataset = {
@@ -53,9 +52,15 @@ const api = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
 function Plot({ figure }: { figure: unknown }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (ref.current) {
-      Plotly.react(ref.current, figure as never, {}, { responsive: true, displayModeBar: false });
-    }
+    let cancelled = false;
+    import("plotly.js-dist-min").then(({ default: Plotly }) => {
+      if (!cancelled && ref.current) {
+        Plotly.react(ref.current, figure as never, {}, { responsive: true, displayModeBar: false });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [figure]);
   return <div className="plot" ref={ref} />;
 }

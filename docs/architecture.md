@@ -18,7 +18,7 @@ React workbench
 
 Allowed tools are `profile_dataset`, `detect_data_quality_issues`, `run_safe_sql`, `run_transform`, `create_chart`, and `summarize_result`.
 
-The system never executes generated Python. SQL is limited to read-only `SELECT`/CTE queries over a registered DuckDB table named `dataset`. Unsafe tokens such as `DROP`, `INSERT`, `COPY`, `ATTACH`, `read_csv`, `INSTALL`, and `PRAGMA` are blocked before execution.
+The system never executes generated Python. SQL is limited to read-only `SELECT`/CTE queries over a registered DuckDB table named `dataset`. Unsafe tokens such as `DROP`, `INSERT`, `COPY`, `ATTACH`, `read_csv`, `INSTALL`, and `PRAGMA` are blocked before execution. The SQL AST is also table-scoped: queries may read only `dataset` and local CTE aliases derived from it, not `information_schema`, qualified schemas, or arbitrary table names.
 
 ## Data Model
 
@@ -29,4 +29,3 @@ The system never executes generated Python. SQL is limited to read-only `SELECT`
 ## Deployment
 
 Local development uses Docker Compose with Postgres, FastAPI, and nginx-served React. Fly.io deployment uses `fly.toml`, a mounted data volume, runtime secrets, and an attached Postgres database.
-
