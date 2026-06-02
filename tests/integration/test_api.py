@@ -104,3 +104,51 @@ def test_transform_tool_and_failed_tool_trace_are_saved(client, monkeypatch):
     failed_payload = failed.json()
     assert failed_payload["validation"]["tool_error"]["tool"] == "run_safe_sql"
     assert any(call["tool"] == "run_safe_sql" and call["status"] == "error" for call in failed_payload["tool_calls"])
+
+
+def test_semantic_popularity_question_uses_dataset_specific_proxy(client):
+    payload = BytesIO(pd.DataFrame(
+        {
+            "Name": ["Indie Quest", "Mega Kart", "Puzzle Town"],
+            "Platform": ["PC", "Switch", "PC"],
+            "Global_Sales": [1.2, 8.5, 2.1],
+            "Critic_Score": [91, 78, 84],
+        }
+    ).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("games.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Show me the most popular videogames."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert analysis["validation"]["clarification_required"] is False
+    assert "Assumption: I treated Global_Sales as the popularity proxy." in analysis["answer"]
+    assert analysis["tables"][0]["rows"][0]["Name"] == "Mega Kart"
+    assert analysis["tables"][0]["columns"] == ["Name", "Global_Sales"]
+    assert analysis["charts"]
+    assert any(call["tool"] == "run_transform" and call["result"]["row_count"] == 3 for call in analysis["tool_calls"])
+
+
+def test_semantic_question_asks_for_clarification_when_data_cannot_support_it(client):
+    payload = BytesIO(pd.DataFrame({"Name": ["Indie Quest", "Mega Kart"], "Genre": ["RPG", "Racing"]}).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("games_no_metric.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Show me the most popular videogames."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert analysis["validation"]["clarification_required"] is True
+    assert analysis["tables"] == []
+    assert analysis["charts"] == []
+    assert "Which column should I use?" in analysis["answer"]
+    assert "Name" in analysis["answer"]

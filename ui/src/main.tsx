@@ -40,7 +40,7 @@ type Analysis = {
   suggested_followups: string[];
 };
 
-const isBlockedAnalysis = (analysis: Analysis) => Boolean(analysis.validation?.blocked);
+const isSavedAnalysis = (analysis: Analysis) => !analysis.validation?.blocked && !analysis.validation?.clarification_required;
 
 function ResultTable({ table }: { table: Analysis["tables"][number] }) {
   return (
@@ -165,7 +165,7 @@ function App() {
       const detail = await api<Dataset>(`/api/v1/datasets/${id}`);
       const history = await api<Analysis[]>(`/api/v1/datasets/${id}/analyses`);
       setSelected(detail);
-      const visibleHistory = history.filter((analysis) => !isBlockedAnalysis(analysis));
+      const visibleHistory = history.filter(isSavedAnalysis);
       setAnalyses(visibleHistory);
       setActiveAnalysis(visibleHistory[0] || null);
     } catch (err) {
@@ -224,7 +224,7 @@ function App() {
         body: JSON.stringify({ question: text })
       });
       setActiveAnalysis(response);
-      if (!isBlockedAnalysis(response)) {
+      if (isSavedAnalysis(response)) {
         setAnalyses((rows) => [response, ...rows.filter((row) => row.id !== response.id)]);
       }
     } catch (err) {

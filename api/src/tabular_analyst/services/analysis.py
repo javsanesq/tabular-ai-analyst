@@ -31,16 +31,31 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     warnings: list[str] = []
     tables: list[dict] = []
     charts: list[dict] = []
-    validation = {"sql_safety": "not_run", "chart_validation": "not_run", "transform_validation": "not_run", "blocked": False, "tool_error": None}
+    validation = {
+        "sql_safety": "not_run",
+        "chart_validation": "not_run",
+        "transform_validation": "not_run",
+        "blocked": False,
+        "clarification_required": False,
+        "tool_error": None,
+    }
     trace = {"plan": plan, "executed_tools": []}
 
     if plan.get("blocked"):
         validation["blocked"] = True
         warnings.append(plan["reason"])
         answer = "I blocked this request because it asks for an unsafe or unsupported action. This copilot only runs validated read-only analysis tools."
+    elif plan.get("clarification_required"):
+        validation["clarification_required"] = True
+        candidates = plan.get("candidate_columns", [])
+        answer = plan.get("clarifying_question") or "I need one clarification before I can run the right analysis."
+        if candidates:
+            answer = f"{answer} Candidate columns: {', '.join(candidates)}."
     else:
         last_table_df: pd.DataFrame | None = None
         answer_parts = []
+        for assumption in plan.get("assumptions", []):
+            answer_parts.append(f"Assumption: {assumption}")
         for step in plan["steps"]:
             tool = step["tool"]
             args = step.get("arguments", {})
@@ -103,11 +118,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
         "warnings": warnings,
         "validation": validation,
         "trace": trace,
-        "suggested_followups": [
-            "Show the strongest data-quality risks.",
-            "Create a chart for the most important numeric column.",
-            "Compare averages across the main category.",
-        ],
+        "suggested_followups": _suggested_followups(plan),
     }
     analysis = AnalysisRecord(
         id=str(uuid4()),
@@ -122,3 +133,16 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     session.add(analysis)
     session.commit()
     return AnalysisResponse(id=analysis.id, dataset_id=dataset.id, question=question, **response_payload)
+
+
+def _suggested_followups(plan: dict) -> list[str]:
+    if plan.get("clarification_required"):
+        candidates = plan.get("candidate_columns", [])
+        if candidates:
+            return [f"Use {column} for this analysis." for column in candidates[:3]]
+        return ["Tell me which column should define the metric.", "Show me the dataset profile first."]
+    return [
+        "Show the strongest data-quality risks.",
+        "Create a chart for the most important numeric column.",
+        "Compare averages across the main category.",
+    ]

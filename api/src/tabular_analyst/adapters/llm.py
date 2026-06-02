@@ -12,15 +12,32 @@ class AnalystPlanner:
             return {"blocked": True, "reason": "Unsafe or out-of-scope request blocked by governed planner.", "steps": []}
         columns = [col["name"] for col in profile.get("columns", [])]
         numeric_cols = [col["name"] for col in profile.get("columns", []) if col.get("inferred_type") == "numeric"]
-        date_cols = [col["name"] for col in profile.get("columns", []) if col.get("inferred_type") == "datetime" or col["name"].lower() in {"year", "date"}]
+        date_cols = [
+            col["name"]
+            for col in profile.get("columns", [])
+            if col.get("inferred_type") == "datetime" or _semantic_score(col["name"], "time") > 0
+        ]
         categorical_cols = [col["name"] for col in profile.get("columns", []) if col.get("inferred_type") == "categorical"]
         steps: list[dict[str, Any]] = [{"tool": "profile_dataset", "arguments": {}}]
         if "issue" in lowered or "quality" in lowered or "missing" in lowered:
             steps.append({"tool": "detect_data_quality_issues", "arguments": {}})
+        semantic_plan = _semantic_plan(lowered, profile, numeric_cols, categorical_cols, date_cols)
+        if semantic_plan:
+            if semantic_plan.get("clarification_required"):
+                return {"blocked": False, "steps": steps, **semantic_plan}
+            steps.extend(semantic_plan["steps"])
+            steps.append({"tool": "summarize_result", "arguments": {}})
+            return {"blocked": False, "steps": steps, "assumptions": semantic_plan.get("assumptions", [])}
         sql = "SELECT * FROM dataset LIMIT 20"
         chart = None
         if any(term in lowered for term in ["top", "highest", "largest", "sort"]) and numeric_cols:
-            sort_by = _mentioned_column(numeric_cols, lowered) or numeric_cols[0]
+            sort_by = _mentioned_column(numeric_cols, lowered) or _best_semantic_column(numeric_cols, "measure")
+            if not sort_by:
+                return {
+                    "blocked": False,
+                    "steps": steps,
+                    **_clarify("Which numeric column should define this ranking?", numeric_cols or columns),
+                }
             limit = 5
             for candidate in [3, 5, 10]:
                 if str(candidate) in lowered:
@@ -55,8 +72,9 @@ class OpenAIPlanner(AnalystPlanner):
         self.settings = settings
 
     def plan(self, question: str, profile: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
-        if not self.settings.openai_api_key:
-            return super().plan(question, profile, issues)
+        deterministic_plan = super().plan(question, profile, issues)
+        if deterministic_plan.get("clarification_required") or deterministic_plan.get("assumptions") or not self.settings.openai_api_key:
+            return deterministic_plan
         try:
             from openai import OpenAI
 
@@ -70,7 +88,10 @@ class OpenAIPlanner(AnalystPlanner):
                     "Plan a complete analysis using the minimum safe sequence of tools. "
                     "Never request arbitrary Python, DDL/DML, file access, network access, or unbounded outputs. "
                     "Use run_safe_sql for read-only tabular queries, run_transform for bounded row operations, "
-                    "create_chart only after a table-producing step when useful, and summarize_result last."
+                    "create_chart only after a table-producing step when useful, and summarize_result last. "
+                    "For ambiguous business words such as popular, best, worst, recent, or important, choose the best "
+                    "available dataset column as an explicit proxy only when the column clearly supports that meaning. "
+                    "Prefer bounded top-N tables and charts for ranking questions."
                 ),
                 input=f"Dataset columns: {allowed_columns}\nQuality issue count: {len(issues)}\nQuestion: {question}",
                 tools=tools,
@@ -82,12 +103,12 @@ class OpenAIPlanner(AnalystPlanner):
                     args = json.loads(item.arguments or "{}")
                     steps.append({"tool": item.name, "arguments": _normalize_tool_arguments(item.name, args)})
             if not steps:
-                return super().plan(question, profile, issues)
+                return deterministic_plan
             if steps[-1]["tool"] != "summarize_result":
                 steps.append({"tool": "summarize_result", "arguments": {}})
             return {"blocked": False, "steps": steps}
         except Exception:
-            return super().plan(question, profile, issues)
+            return deterministic_plan
 
 
 def build_planner(settings: Settings) -> AnalystPlanner:
@@ -100,6 +121,191 @@ def _mentioned_column(columns: list[str], lowered_question: str) -> str | None:
         if re.search(pattern, lowered_question):
             return column
     return None
+
+
+def _semantic_plan(
+    lowered_question: str,
+    profile: dict[str, Any],
+    numeric_cols: list[str],
+    categorical_cols: list[str],
+    date_cols: list[str],
+) -> dict[str, Any] | None:
+    columns = [col["name"] for col in profile.get("columns", [])]
+    label_col = _best_label_column(categorical_cols) or (categorical_cols[0] if categorical_cols else (columns[0] if columns else None))
+    limit = _requested_limit(lowered_question)
+
+    if any(term in lowered_question for term in ["popular", "most played", "most downloaded", "most sold"]):
+        proxy = _best_semantic_column(numeric_cols, "popularity")
+        if not proxy:
+            return _clarify(
+                "I can rank popularity only if the dataset has a popularity proxy such as sales, downloads, owners, players, ratings count, reviews, or revenue. Which column should I use?",
+                columns,
+            )
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the popularity proxy.", "Most popular rows")
+
+    if any(term in lowered_question for term in ["best", "top rated", "highest rated"]):
+        proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
+        if not proxy:
+            return _clarify("Which score or rating column should define 'best' for this dataset?", numeric_cols or columns)
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}")
+
+    if any(term in lowered_question for term in ["worst", "lowest rated", "least rated"]):
+        proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
+        if not proxy:
+            return _clarify("Which score or rating column should define 'worst' for this dataset?", numeric_cols or columns)
+        return _ranking_plan(label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}")
+
+    if any(term in lowered_question for term in ["recent", "newest", "latest"]):
+        proxy = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
+        if not proxy:
+            return _clarify("Which date or year column should define recency for this dataset?", columns)
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False)
+
+    if any(term in lowered_question for term in ["distribution", "histogram"]):
+        metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "measure") or (numeric_cols[0] if numeric_cols else None)
+        if not metric:
+            return _clarify("Which numeric column should I use for the distribution?", columns)
+        return {
+            "steps": [
+                {"tool": "run_safe_sql", "arguments": {"sql": f'SELECT "{metric}" FROM dataset WHERE "{metric}" IS NOT NULL LIMIT 500'}},
+                {"tool": "create_chart", "arguments": {"chart_type": "histogram", "x": metric, "y": None, "color": None, "title": f"Distribution of {metric}"}},
+            ],
+            "assumptions": [f"I used {metric} for the distribution."],
+        }
+
+    if any(term in lowered_question for term in ["correlation", "correlate", "relationships between numeric"]):
+        if len(numeric_cols) < 2:
+            return _clarify("Correlation analysis needs at least two numeric columns. Which numeric columns should I compare?", columns)
+        selected = numeric_cols[: min(8, len(numeric_cols))]
+        return {
+            "steps": [
+                {"tool": "run_safe_sql", "arguments": {"sql": "SELECT " + ", ".join(f'"{col}"' for col in selected) + " FROM dataset LIMIT 500"}},
+                {"tool": "create_chart", "arguments": {"chart_type": "heatmap", "x": None, "y": None, "color": None, "title": "Numeric correlation heatmap"}},
+            ],
+            "assumptions": [f"I compared numeric columns: {', '.join(selected)}."],
+        }
+
+    return None
+
+
+def _ranking_plan(label_col: str | None, metric_col: str, limit: int, descending: bool, assumption: str, title: str, chart: bool = True) -> dict[str, Any]:
+    selected = []
+    if label_col and label_col != metric_col:
+        selected.append(label_col)
+    selected.append(metric_col)
+    steps = [{"tool": "run_transform", "arguments": {"select": selected, "sort_by": metric_col, "sort_desc": descending, "limit": limit}}]
+    if chart and label_col:
+        steps.append({"tool": "create_chart", "arguments": {"chart_type": "bar", "x": label_col, "y": metric_col, "color": None, "title": title}})
+    return {"steps": steps, "assumptions": [assumption]}
+
+
+def _clarify(question: str, candidate_columns: list[str]) -> dict[str, Any]:
+    return {
+        "clarification_required": True,
+        "clarifying_question": question,
+        "candidate_columns": candidate_columns[:12],
+    }
+
+
+def _requested_limit(lowered_question: str) -> int:
+    for match in re.finditer(r"\b(?:top|first|best|show)?\s*(\d{1,3})\b", lowered_question):
+        value = int(match.group(1))
+        if 1 <= value <= 50:
+            return value
+    return 10
+
+
+def _best_label_column(categorical_cols: list[str]) -> str | None:
+    preferred = ["name", "title", "game", "videogame", "video_game", "movie", "product", "country", "city", "company"]
+    for column in categorical_cols:
+        tokens = _column_tokens(column)
+        if any(token in tokens for token in preferred):
+            return column
+    return categorical_cols[0] if categorical_cols else None
+
+
+def _best_semantic_column(columns: list[str], concept: str) -> str | None:
+    if not columns:
+        return None
+    scored = [(column, _semantic_score(column, concept)) for column in columns]
+    scored = [(column, score) for column, score in scored if score > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda row: row[1], reverse=True)
+    if len(scored) > 1 and scored[0][1] == scored[1][1]:
+        return None
+    return scored[0][0]
+
+
+def _semantic_score(column: str, concept: str) -> int:
+    tokens = _column_tokens(column)
+    joined = "_".join(tokens)
+    weights = {
+        "popularity": {
+            "global_sales": 12,
+            "total_sales": 12,
+            "sales": 10,
+            "copies_sold": 10,
+            "downloads": 10,
+            "owners": 9,
+            "players": 9,
+            "users": 8,
+            "installs": 8,
+            "plays": 8,
+            "visits": 8,
+            "review_count": 7,
+            "reviews": 6,
+            "rating_count": 7,
+            "votes": 6,
+            "revenue": 6,
+            "gross": 5,
+            "score": 3,
+            "rating": 3,
+        },
+        "quality": {
+            "critic_score": 10,
+            "user_score": 10,
+            "metacritic": 10,
+            "score": 8,
+            "rating": 8,
+            "review_score": 8,
+            "quality": 8,
+            "stars": 6,
+        },
+        "time": {
+            "release_date": 10,
+            "released": 9,
+            "date": 8,
+            "year": 8,
+            "created_at": 6,
+            "updated_at": 5,
+        },
+        "measure": {
+            "sales": 5,
+            "revenue": 5,
+            "score": 4,
+            "rating": 4,
+            "price": 4,
+            "value": 3,
+            "count": 3,
+            "total": 2,
+        },
+    }
+    concept_weights = weights.get(concept, {})
+    score = 0
+    for key, weight in concept_weights.items():
+        key_tokens = key.split("_")
+        if key == joined:
+            score = max(score, weight + 3)
+        elif all(token in tokens for token in key_tokens):
+            score = max(score, weight)
+        elif any(token in tokens for token in key_tokens):
+            score = max(score, max(1, weight - 4))
+    return score
+
+
+def _column_tokens(column: str) -> list[str]:
+    return [part for part in re.split(r"[^a-z0-9]+", column.lower()) if part]
 
 
 def _strict_object(properties: dict[str, Any]) -> dict[str, Any]:

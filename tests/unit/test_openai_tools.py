@@ -63,3 +63,76 @@ def test_deterministic_planner_matches_column_names_without_substring_collisions
 
     transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
     assert transform["arguments"]["sort_by"] == "sulphates"
+
+
+def test_deterministic_planner_infers_popularity_proxy_for_ranking() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical"},
+            {"name": "Platform", "inferred_type": "categorical"},
+            {"name": "Global_Sales", "inferred_type": "numeric"},
+            {"name": "Critic_Score", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show me the most popular videogames.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    chart = next(step for step in plan["steps"] if step["tool"] == "create_chart")
+    assert transform["arguments"] == {
+        "select": ["Name", "Global_Sales"],
+        "sort_by": "Global_Sales",
+        "sort_desc": True,
+        "limit": 10,
+    }
+    assert chart["arguments"]["x"] == "Name"
+    assert chart["arguments"]["y"] == "Global_Sales"
+    assert "popularity proxy" in plan["assumptions"][0]
+
+
+def test_deterministic_planner_asks_for_clarification_without_proxy_column() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical"},
+            {"name": "Genre", "inferred_type": "categorical"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show me the most popular videogames.", profile, [])
+
+    assert plan["clarification_required"] is True
+    assert "Which column should I use?" in plan["clarifying_question"]
+    assert plan["candidate_columns"] == ["Name", "Genre"]
+
+
+def test_deterministic_planner_does_not_guess_ambiguous_top_metric() -> None:
+    profile = {
+        "columns": [
+            {"name": "Customer", "inferred_type": "categorical"},
+            {"name": "Age", "inferred_type": "numeric"},
+            {"name": "Tenure", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show me the top customers.", profile, [])
+
+    assert plan["clarification_required"] is True
+    assert "Which numeric column should define this ranking?" in plan["clarifying_question"]
+    assert plan["candidate_columns"] == ["Age", "Tenure"]
+
+
+def test_deterministic_planner_recognizes_date_like_numeric_columns() -> None:
+    profile = {
+        "columns": [
+            {"name": "Game_Title", "inferred_type": "categorical"},
+            {"name": "Release_Year", "inferred_type": "numeric"},
+            {"name": "Global_Sales", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show me the latest games.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["select"] == ["Game_Title", "Release_Year"]
+    assert transform["arguments"]["sort_by"] == "Release_Year"
+    assert transform["arguments"]["sort_desc"] is True
