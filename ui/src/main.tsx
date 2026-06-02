@@ -40,6 +40,8 @@ type Analysis = {
   suggested_followups: string[];
 };
 
+const isBlockedAnalysis = (analysis: Analysis) => Boolean(analysis.validation?.blocked);
+
 function ResultTable({ table }: { table: Analysis["tables"][number] }) {
   return (
     <div className="table-wrap">
@@ -57,8 +59,30 @@ const api = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
   const headers = new Headers(init.headers);
   if (token) headers.set("x-demo-key", token);
   const response = await fetch(path, { ...init, headers });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error(await formatApiError(response));
   return response.json();
+};
+
+const formatApiError = async (response: Response): Promise<string> => {
+  if (response.status === 413) {
+    return "Upload is too large for this demo. Try a smaller CSV/XLSX file or reduce the number of rows and columns before uploading.";
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const body = await response.text();
+  if (contentType.includes("application/json")) {
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown };
+      const detail = parsed.detail ?? parsed.message;
+      if (typeof detail === "string") return detail;
+      if (detail) return JSON.stringify(detail);
+    } catch {
+      return body || `Request failed with status ${response.status}.`;
+    }
+  }
+
+  const plain = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return plain || `Request failed with status ${response.status}.`;
 };
 
 function Plot({ figure }: { figure: unknown }) {
@@ -141,8 +165,9 @@ function App() {
       const detail = await api<Dataset>(`/api/v1/datasets/${id}`);
       const history = await api<Analysis[]>(`/api/v1/datasets/${id}/analyses`);
       setSelected(detail);
-      setAnalyses(history);
-      setActiveAnalysis(history[0] || null);
+      const visibleHistory = history.filter((analysis) => !isBlockedAnalysis(analysis));
+      setAnalyses(visibleHistory);
+      setActiveAnalysis(visibleHistory[0] || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Dataset load failed");
     } finally {
@@ -199,7 +224,9 @@ function App() {
         body: JSON.stringify({ question: text })
       });
       setActiveAnalysis(response);
-      setAnalyses((rows) => [response, ...rows.filter((row) => row.id !== response.id)]);
+      if (!isBlockedAnalysis(response)) {
+        setAnalyses((rows) => [response, ...rows.filter((row) => row.id !== response.id)]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
@@ -347,7 +374,7 @@ function App() {
                 <div><span>Rows</span><strong>{selected.row_count}</strong></div>
                 <div><span>Columns</span><strong>{selected.column_count}</strong></div>
                 <div><span>Issues</span><strong>{selected.issues?.length ?? 0}</strong></div>
-                <div><span>Analyses</span><strong>{analyses.length}</strong></div>
+                <div><span>Saved analyses</span><strong>{analyses.length}</strong></div>
               </div>
               <div className="column-list">
                 {profileColumns.map((column) => (

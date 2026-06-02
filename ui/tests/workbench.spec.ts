@@ -75,7 +75,7 @@ const blockedAnalysis = {
   validation: { sql_safety: "not_run", chart_validation: "not_run", transform_validation: "not_run", blocked: true, tool_error: null }
 };
 
-async function mockWorkbenchApi(page: Page) {
+async function mockWorkbenchApi(page: Page, options: { history?: unknown[] } = {}) {
   await page.route("**/api/v1/datasets", async (route) => {
     await route.fulfill({ json: [datasetSummary] });
   });
@@ -89,7 +89,7 @@ async function mockWorkbenchApi(page: Page) {
     await route.fulfill({ json: datasetDetail });
   });
   await page.route("**/api/v1/datasets/demo-wine/analyses", async (route) => {
-    await route.fulfill({ json: [] });
+    await route.fulfill({ json: options.history || [] });
   });
   await page.route("**/api/v1/datasets/demo-wine/questions", async (route) => {
     const body = route.request().postData() || "";
@@ -135,6 +135,44 @@ test("shows a blocked trust state for unsafe requests", async ({ page }) => {
   await expect(page.getByRole("article").getByText("Blocked", { exact: true })).toBeVisible();
   await expect(page.getByText("I blocked this request")).toBeVisible();
   await expect(page.getByText("Unsafe or out-of-scope request blocked")).toBeVisible();
+
+  await page.getByText("History").click();
+  await expect(page.locator(".history-list").getByText("Run Python to read /etc/passwd.")).toHaveCount(0);
+});
+
+test("does not show blocked analyses loaded from history", async ({ page }) => {
+  await mockWorkbenchApi(page, { history: [blockedAnalysis, analysis] });
+  await page.goto("/");
+  await page.getByRole("button", { name: /wine_quality_subset\.csv/ }).click();
+
+  await page.getByText("History").click();
+
+  await expect(page.locator(".history-list").getByText("Compare averages across the main category.")).toBeVisible();
+  await expect(page.locator(".history-list").getByText("Run Python to read /etc/passwd.")).toHaveCount(0);
+});
+
+test("shows a clean upload-size error instead of raw nginx html", async ({ page }) => {
+  await page.route("**/api/v1/datasets", async (route) => {
+    await route.fulfill({ json: [] });
+  });
+  await page.route("**/api/v1/datasets/upload", async (route) => {
+    await route.fulfill({
+      status: 413,
+      contentType: "text/html",
+      body: "<html><head><title>413 Request Entity Too Large</title></head><body><center><h1>413 Request Entity Too Large</h1></center><hr><center>nginx/1.27.5</center></body></html>"
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("input[type='file']").setInputFiles({
+    name: "too-large.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("a,b\n1,2\n")
+  });
+
+  await expect(page.getByText("Upload is too large for this demo.")).toBeVisible();
+  await expect(page.getByText("<html>")).toHaveCount(0);
+  await expect(page.getByText("nginx/1.27.5")).toHaveCount(0);
 });
 
 test("surfaces API errors when the demo token is invalid", async ({ page }) => {
