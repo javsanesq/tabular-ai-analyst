@@ -206,3 +206,33 @@ def test_semantic_popularity_question_filters_by_genre_value(client):
     assert analysis["tables"][0]["rows"][0]["Name"] == "FIFA 10"
     assert analysis["tables"][0]["rows"][0]["Genre"] == "Sports"
     assert analysis["charts"]
+
+
+def test_semantic_worst_selling_question_sorts_sales_ascending_and_excludes_missing(client):
+    payload = BytesIO(pd.DataFrame(
+        {
+            "Name": ["Blockbuster", "Tiny Seller", "Missing Sales", "Small Seller"],
+            "Genre": ["Action", "Sports", "Sports", "Puzzle"],
+            "Global_Sales": [25.0, 0.02, None, 0.01],
+            "Critic_Score": [50, 99, 10, 80],
+        }
+    ).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("worst_sales_games.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Give me a graph with the worst selling videogames of all time."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert "I treated Global_Sales as the popularity proxy" in analysis["answer"]
+    assert "I excluded 1 row(s) with missing Global_Sales before ranking" in analysis["answer"]
+    assert analysis["tables"][0]["rows"][0]["Name"] == "Small Seller"
+    assert analysis["tables"][0]["rows"][1]["Name"] == "Tiny Seller"
+    assert all(row["Global_Sales"] is not None for row in analysis["tables"][0]["rows"])
+    transform_call = next(call for call in analysis["tool_calls"] if call["tool"] == "run_transform")
+    assert transform_call["arguments"]["sort_desc"] is False
+    assert {"column": "Global_Sales", "op": "not_null", "value": None} in transform_call["arguments"]["filters"]

@@ -186,3 +186,57 @@ def test_deterministic_planner_filters_category_even_when_it_is_display_label() 
     transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
     assert transform["arguments"]["filters"] == [{"column": "color", "op": "contains", "value": "red"}]
     assert transform["arguments"]["select"] == ["color", "quality"]
+
+
+def test_deterministic_planner_treats_worst_selling_as_lowest_sales() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical"},
+            {"name": "Genre", "inferred_type": "categorical", "top_values": [{"value": "Sports", "count": 2}]},
+            {"name": "Global_Sales", "inferred_type": "numeric", "missing_count": 0},
+            {"name": "Critic_Score", "inferred_type": "numeric", "missing_count": 0},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Give me a graph with the worst selling videogames of all time.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    chart = next(step for step in plan["steps"] if step["tool"] == "create_chart")
+    assert transform["arguments"]["sort_by"] == "Global_Sales"
+    assert transform["arguments"]["sort_desc"] is False
+    assert chart["arguments"]["y"] == "Global_Sales"
+    assert "popularity proxy" in plan["assumptions"][0]
+
+
+def test_deterministic_planner_excludes_missing_metric_values_before_ranking() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical"},
+            {"name": "Global_Sales", "inferred_type": "numeric", "missing_count": 3},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show the worst selling video games.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [{"column": "Global_Sales", "op": "not_null", "value": None}]
+    assert "excluded 3 row(s) with missing Global_Sales" in plan["assumptions"][1]
+
+
+def test_deterministic_planner_adds_year_range_filter_to_ranking() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical"},
+            {"name": "Year", "inferred_type": "numeric", "missing_count": 0, "numeric": {"min": 1980, "max": 2020}},
+            {"name": "Global_Sales", "inferred_type": "numeric", "missing_count": 0},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show the best selling video games between 2000 and 2010.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [
+        {"column": "Year", "op": ">=", "value": 2000},
+        {"column": "Year", "op": "<=", "value": 2010},
+    ]
+    assert transform["arguments"]["select"] == ["Name", "Year", "Global_Sales"]

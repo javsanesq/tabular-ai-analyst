@@ -133,34 +133,49 @@ def _semantic_plan(
     columns = [col["name"] for col in profile.get("columns", [])]
     label_col = _best_label_column(categorical_cols) or (categorical_cols[0] if categorical_cols else (columns[0] if columns else None))
     limit = _requested_limit(lowered_question)
-    filters = _semantic_filters(lowered_question, profile, categorical_cols, label_col)
+    filters = [
+        *_semantic_filters(lowered_question, profile, categorical_cols, label_col),
+        *_time_filters(lowered_question, profile, date_cols),
+    ]
 
-    if any(term in lowered_question for term in ["popular", "most played", "most downloaded", "most sold"]):
-        proxy = _best_semantic_column(numeric_cols, "popularity")
+    ranking_intent = _ranking_intent(lowered_question)
+    if ranking_intent == "popularity_desc" or ranking_intent == "popularity_asc":
+        proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "popularity")
         if not proxy:
             return _clarify(
                 "I can rank popularity only if the dataset has a popularity proxy such as sales, downloads, owners, players, ratings count, reviews, or revenue. Which column should I use?",
                 columns,
             )
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the popularity proxy.", "Most popular rows", filters=filters)
+        descending = ranking_intent == "popularity_desc"
+        direction = "highest" if descending else "lowest"
+        return _ranking_plan(
+            profile,
+            label_col,
+            proxy,
+            limit,
+            descending,
+            f"I treated {proxy} as the popularity proxy.",
+            f"Rows with the {direction} {proxy}",
+            filters=filters,
+        )
 
-    if any(term in lowered_question for term in ["best", "top rated", "highest rated"]):
+    if ranking_intent == "quality_desc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'best' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters)
 
-    if any(term in lowered_question for term in ["worst", "lowest rated", "least rated"]):
+    if ranking_intent == "quality_asc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'worst' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters)
 
     if any(term in lowered_question for term in ["recent", "newest", "latest"]):
         proxy = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
         if not proxy:
             return _clarify("Which date or year column should define recency for this dataset?", columns)
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters)
 
     if any(term in lowered_question for term in ["distribution", "histogram"]):
         metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "measure") or (numeric_cols[0] if numeric_cols else None)
@@ -190,6 +205,7 @@ def _semantic_plan(
 
 
 def _ranking_plan(
+    profile: dict[str, Any],
     label_col: str | None,
     metric_col: str,
     limit: int,
@@ -207,17 +223,62 @@ def _ranking_plan(
         if column not in selected and column != metric_col:
             selected.append(column)
     selected.append(metric_col)
+    transform_filters = [*filters] if filters else []
+    missing_count = _column_missing_count(profile, metric_col)
+    if missing_count:
+        transform_filters.append({"column": metric_col, "op": "not_null", "value": None})
     transform_args: dict[str, Any] = {"select": selected, "sort_by": metric_col, "sort_desc": descending, "limit": limit}
-    if filters:
-        transform_args["filters"] = filters
+    if transform_filters:
+        transform_args["filters"] = transform_filters
     steps = [{"tool": "run_transform", "arguments": transform_args}]
     if chart and label_col:
         steps.append({"tool": "create_chart", "arguments": {"chart_type": "bar", "x": label_col, "y": metric_col, "color": None, "title": title}})
     assumptions = [assumption]
     if filters:
-        filter_text = ", ".join(f"{filt['column']} contains {filt['value']}" for filt in filters)
+        filter_text = ", ".join(_format_filter(filt) for filt in filters)
         assumptions.append(f"I filtered the ranking to rows where {filter_text}.")
+    if missing_count:
+        assumptions.append(f"I excluded {missing_count} row(s) with missing {metric_col} before ranking.")
     return {"steps": steps, "assumptions": assumptions}
+
+
+def _format_filter(filt: dict[str, Any]) -> str:
+    op = filt.get("op")
+    column = filt.get("column")
+    value = filt.get("value")
+    if op == "contains":
+        return f"{column} contains {value}"
+    if op == "not_null":
+        return f"{column} is not missing"
+    return f"{column} {op} {value}"
+
+
+def _ranking_intent(lowered_question: str) -> str | None:
+    if _has_any(lowered_question, ["selling", "sales", "sold", "seller", "sellers", "purchased", "revenue", "gross"]):
+        if _has_any(lowered_question, ["worst", "least", "lowest", "bottom", "smallest"]):
+            return "popularity_asc"
+        if _has_any(lowered_question, ["best", "most", "top", "highest", "largest", "popular"]):
+            return "popularity_desc"
+    if _has_any(lowered_question, ["popular", "most played", "most downloaded", "most sold", "downloaded", "players", "owners", "installs"]):
+        if _has_any(lowered_question, ["least", "lowest", "worst", "bottom"]):
+            return "popularity_asc"
+        return "popularity_desc"
+    if _has_any(lowered_question, ["best", "top rated", "highest rated"]):
+        return "quality_desc"
+    if _has_any(lowered_question, ["worst", "lowest rated", "least rated"]):
+        return "quality_asc"
+    return None
+
+
+def _has_any(text: str, terms: list[str]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _column_missing_count(profile: dict[str, Any], column_name: str) -> int:
+    for column in profile.get("columns", []):
+        if column.get("name") == column_name:
+            return int(column.get("missing_count") or 0)
+    return 0
 
 
 def _semantic_filters(lowered_question: str, profile: dict[str, Any], categorical_cols: list[str], label_col: str | None) -> list[dict[str, Any]]:
@@ -230,6 +291,26 @@ def _semantic_filters(lowered_question: str, profile: dict[str, Any], categorica
         if match and not any(existing["column"] == name for existing in matches):
             matches.append({"column": name, "op": "contains", "value": match})
     return matches[:3]
+
+
+def _time_filters(lowered_question: str, profile: dict[str, Any], date_cols: list[str]) -> list[dict[str, Any]]:
+    column = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
+    if not column:
+        return []
+    years = [int(match.group(0)) for match in re.finditer(r"\b(?:19|20)\d{2}\b", lowered_question)]
+    if not years:
+        return []
+    if "between" in lowered_question and len(years) >= 2:
+        start, end = sorted(years[:2])
+        return [{"column": column, "op": ">=", "value": start}, {"column": column, "op": "<=", "value": end}]
+    year = years[0]
+    if _has_any(lowered_question, ["after", "since", "from"]):
+        return [{"column": column, "op": ">=", "value": year}]
+    if _has_any(lowered_question, ["before", "until", "up to"]):
+        return [{"column": column, "op": "<=", "value": year}]
+    if re.search(r"\bin\b", lowered_question) or "year" in lowered_question:
+        return [{"column": column, "op": "==", "value": year}]
+    return []
 
 
 def _is_identifier_label(column: str) -> bool:
@@ -427,7 +508,7 @@ def _tool_schemas(columns: list[str]) -> list[dict[str, Any]]:
     column_enum = columns or ["dataset_column"]
     filter_schema = _strict_object({
         "column": {"type": "string", "enum": column_enum},
-        "op": {"type": "string", "enum": ["==", "!=", ">", ">=", "<", "<=", "contains"]},
+        "op": {"type": "string", "enum": ["==", "!=", ">", ">=", "<", "<=", "contains", "not_null"]},
         "value": {"type": ["string", "number", "boolean", "null"]},
     })
     aggregation_schema = _strict_object({

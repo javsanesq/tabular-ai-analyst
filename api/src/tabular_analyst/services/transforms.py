@@ -18,6 +18,8 @@ def run_transform(df: pd.DataFrame, spec: TransformSpec) -> dict[str, Any]:
             work = work[work[column] == value]
         elif op == "!=":
             work = work[work[column] != value]
+        elif op == "not_null":
+            work = work[work[column].notna()]
         elif op in {">", ">=", "<", "<="}:
             numeric = pd.to_numeric(work[column], errors="coerce")
             target = float(value)
