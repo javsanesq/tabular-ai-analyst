@@ -20,6 +20,7 @@ def test_openai_tool_schemas_are_strict_response_compatible() -> None:
         "detect_data_quality_issues",
         "run_safe_sql",
         "run_transform",
+        "find_matching_values",
         "create_chart",
         "summarize_result",
     }
@@ -240,3 +241,36 @@ def test_deterministic_planner_adds_year_range_filter_to_ranking() -> None:
         {"column": "Year", "op": "<=", "value": 2010},
     ]
     assert transform["arguments"]["select"] == ["Name", "Year", "Global_Sales"]
+
+
+def test_deterministic_planner_searches_unresolved_categorical_values() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical", "top_values": [{"value": "Wii Sports", "count": 1}]},
+            {"name": "Publisher", "inferred_type": "categorical", "top_values": [{"value": "Nintendo", "count": 50}]},
+            {"name": "Global_Sales", "inferred_type": "numeric", "missing_count": 0},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show the most popular Atlus video games.", profile, [])
+
+    search = next(step for step in plan["steps"] if step["tool"] == "find_matching_values")
+    assert search["arguments"] == {"terms": ["atlus"], "columns": ["Publisher"], "limit": 5}
+
+
+def test_deterministic_planner_compares_average_metric_by_category() -> None:
+    profile = {
+        "columns": [
+            {"name": "Genre", "inferred_type": "categorical"},
+            {"name": "Global_Sales", "inferred_type": "numeric", "missing_count": 0},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Which genre has the highest average Global_Sales?", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    chart = next(step for step in plan["steps"] if step["tool"] == "create_chart")
+    assert transform["arguments"]["group_by"] == ["Genre"]
+    assert transform["arguments"]["aggregations"] == {"Global_Sales": "mean"}
+    assert transform["arguments"]["sort_by"] == "Global_Sales_mean"
+    assert chart["arguments"]["y"] == "Global_Sales_mean"

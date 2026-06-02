@@ -44,6 +44,8 @@ def run_transform(df: pd.DataFrame, spec: TransformSpec) -> dict[str, Any]:
             aggregations = {work.columns[0]: "count"}
         work = work.groupby(spec.group_by, dropna=False).agg(aggregations).reset_index()
         work.columns = ["_".join(col).strip("_") if isinstance(col, tuple) else str(col) for col in work.columns]
+        rename_map = {column: f"{column}_{agg}" for column, agg in aggregations.items() if column in work.columns}
+        work = work.rename(columns=rename_map)
     elif spec.select:
         missing = [col for col in spec.select if col not in work.columns]
         if missing:

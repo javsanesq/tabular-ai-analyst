@@ -26,3 +26,14 @@ def test_transform_supports_not_null_filter():
 
     assert result["row_count"] == 2
     assert [row["game"] for row in result["rows"]] == ["c", "b"]
+
+
+def test_transform_names_grouped_aggregation_columns():
+    df = pd.DataFrame({"genre": ["sports", "sports", "racing"], "sales": [10, 20, 5]})
+    result = run_transform(
+        df,
+        TransformSpec(group_by=["genre"], aggregations={"sales": "mean"}, sort_by="sales_mean", sort_desc=True),
+    )
+
+    assert result["columns"] == ["genre", "sales_mean"]
+    assert result["rows"][0] == {"genre": "sports", "sales_mean": 15.0}

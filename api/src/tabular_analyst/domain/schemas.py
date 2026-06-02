@@ -50,6 +50,7 @@ class AnalysisResponse(BaseModel):
     warnings: list[str]
     validation: dict[str, Any]
     trace: dict[str, Any]
+    reasoning: list[dict[str, Any]] = Field(default_factory=list)
     suggested_followups: list[str]
 
 
@@ -58,4 +59,3 @@ class EvalRunResponse(BaseModel):
     status: str
     metrics: dict[str, Any]
     cases: list[dict[str, Any]]
-

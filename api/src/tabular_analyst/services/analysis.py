@@ -15,6 +15,7 @@ from tabular_analyst.services.files import read_dataframe
 from tabular_analyst.services.profiling import detect_quality_issues, profile_dataframe
 from tabular_analyst.services.sql_safety import run_safe_sql
 from tabular_analyst.services.transforms import run_transform
+from tabular_analyst.services.value_search import find_matching_values
 
 
 def _dataset_path(settings: Settings, dataset: DatasetRecord) -> Path:
@@ -36,6 +37,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     warnings: list[str] = []
     tables: list[dict] = []
     charts: list[dict] = []
+    reasoning: list[dict] = []
     validation = {
         "sql_safety": "not_run",
         "chart_validation": "not_run",
@@ -58,12 +60,14 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
             answer = f"{answer} Candidate columns: {', '.join(candidates)}."
     else:
         last_table_df: pd.DataFrame | None = None
+        pending_value_matches: list[dict] = []
         answer_parts = []
         for assumption in plan.get("assumptions", []):
             answer_parts.append(f"Assumption: {assumption}")
+            reasoning.append({"kind": "assumption", "label": assumption})
         for step in plan["steps"]:
             tool = step["tool"]
-            args = step.get("arguments", {})
+            args = dict(step.get("arguments", {}))
             record = {"tool": tool, "arguments": args, "status": "ok"}
             try:
                 if tool == "profile_dataset":
@@ -79,11 +83,27 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
                     last_table_df = pd.DataFrame(result["rows"])
                     record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
                 elif tool == "run_transform":
+                    applied_match = _apply_value_search_filter(args, pending_value_matches)
+                    if applied_match:
+                        answer_parts.append(
+                            f"Assumption: I matched '{applied_match['term']}' to {applied_match['column']} contains {applied_match['value']}."
+                        )
+                        reasoning.append({
+                            "kind": "filter",
+                            "label": f"{applied_match['column']} contains {applied_match['value']}",
+                            "source": "value_search",
+                        })
+                        record["arguments"] = args
+                    reasoning.extend(_reasoning_from_transform(args, profile))
                     result = run_transform(df, TransformSpec(**args))
                     validation["transform_validation"] = "passed"
                     tables.append({"name": "transform_result", **result})
                     last_table_df = pd.DataFrame(result["rows"])
                     record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
+                elif tool == "find_matching_values":
+                    result = find_matching_values(df, args.get("terms") or [], args.get("columns"), args.get("limit") or 5)
+                    pending_value_matches = result["matches"]
+                    record["result"] = result
                 elif tool == "create_chart":
                     source = last_table_df if last_table_df is not None and not last_table_df.empty else df
                     chart = build_chart(source, ChartSpec(**args))
@@ -123,6 +143,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
         "warnings": warnings,
         "validation": validation,
         "trace": trace,
+        "reasoning": _dedupe_reasoning(reasoning),
         "suggested_followups": _suggested_followups(plan),
     }
     analysis = AnalysisRecord(
@@ -138,6 +159,64 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     session.add(analysis)
     session.commit()
     return AnalysisResponse(id=analysis.id, dataset_id=dataset.id, question=question, **response_payload)
+
+
+def _apply_value_search_filter(args: dict, matches: list[dict]) -> dict | None:
+    if not matches:
+        return None
+    filters = args.setdefault("filters", [])
+    existing_columns = {filter_.get("column") for filter_ in filters if filter_.get("op") == "contains"}
+    if existing_columns:
+        return None
+    selected = args.setdefault("select", [])
+    for match in matches:
+        column = match["column"]
+        if column not in selected:
+            selected.insert(max(0, len(selected) - 1), column)
+        filters.append({"column": column, "op": "contains", "value": match["value"]})
+        return match
+    return None
+
+
+def _reasoning_from_transform(args: dict, profile: dict) -> list[dict]:
+    chips = []
+    sort_by = args.get("sort_by")
+    if sort_by:
+        direction = "descending" if args.get("sort_desc", True) else "ascending"
+        chips.append({"kind": "metric", "label": f"Metric: {sort_by}"})
+        chips.append({"kind": "sort", "label": f"Sort: {direction}"})
+    for filter_ in args.get("filters") or []:
+        op = filter_.get("op")
+        column = filter_.get("column")
+        value = filter_.get("value")
+        if op == "contains":
+            chips.append({"kind": "filter", "label": f"Filter: {column} contains {value}"})
+        elif op == "not_null":
+            missing = _profile_missing_count(profile, column)
+            label = f"Missing {column} excluded" if not missing else f"Missing {column} excluded ({missing} row(s))"
+            chips.append({"kind": "caveat", "label": label})
+        else:
+            chips.append({"kind": "filter", "label": f"Filter: {column} {op} {value}"})
+    return chips
+
+
+def _profile_missing_count(profile: dict, column_name: str | None) -> int:
+    for column in profile.get("columns", []):
+        if column.get("name") == column_name:
+            return int(column.get("missing_count") or 0)
+    return 0
+
+
+def _dedupe_reasoning(reasoning: list[dict]) -> list[dict]:
+    deduped = []
+    seen = set()
+    for item in reasoning:
+        key = (item.get("kind"), item.get("label"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _suggested_followups(plan: dict) -> list[str]:

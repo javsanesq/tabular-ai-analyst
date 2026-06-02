@@ -37,6 +37,7 @@ type Analysis = {
   warnings: string[];
   validation: Record<string, unknown>;
   trace: Record<string, unknown>;
+  reasoning?: Array<{ kind: string; label: string; source?: string }>;
   suggested_followups: string[];
 };
 
@@ -234,6 +235,14 @@ function App() {
     }
   };
 
+  const runFollowup = (followup: string) => {
+    const contextual = activeAnalysis?.validation?.clarification_required && activeAnalysis.question
+      ? `${activeAnalysis.question} ${followup}`
+      : followup;
+    setQuestion(contextual);
+    ask(contextual);
+  };
+
   const closeDataset = () => {
     setSelected(null);
     setActiveAnalysis(null);
@@ -247,7 +256,7 @@ function App() {
   const trustState = useMemo(() => {
     if (!activeAnalysis) return "waiting";
     if (activeAnalysis.validation.blocked) return "blocked";
-    if (activeAnalysis.validation.sql_safety === "passed") return "validated";
+    if (activeAnalysis.validation.sql_safety === "passed" || activeAnalysis.validation.transform_validation === "passed") return "validated";
     return "limited";
   }, [activeAnalysis]);
   const trustLabel = trustState === "waiting" ? "Ready" : trustState === "blocked" ? "Blocked" : trustState === "validated" ? "Validated" : "Limited";
@@ -344,6 +353,23 @@ function App() {
                 <span className={`trust-pill ${trustState}`}>{trustLabel}</span>
               </div>
               <p>{activeAnalysis.answer}</p>
+              {activeAnalysis.reasoning && activeAnalysis.reasoning.length > 0 && (
+                <div className="reasoning-strip" aria-label="Analyst reasoning">
+                  {activeAnalysis.reasoning.map((item, index) => (
+                    <span className={`reasoning-chip ${item.kind}`} key={`${item.kind}-${item.label}-${index}`}>{item.label}</span>
+                  ))}
+                </div>
+              )}
+              {activeAnalysis.suggested_followups.length > 0 && (
+                <div className="followup-panel">
+                  <span>Follow-up options</span>
+                  <div>
+                    {activeAnalysis.suggested_followups.map((followup) => (
+                      <button key={followup} disabled={busy} onClick={() => runFollowup(followup)}>{followup}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {activeAnalysis.warnings.length > 0 && (
                 <div className="warning-box">
                   {activeAnalysis.warnings.slice(0, 3).map((warning) => <span key={warning}>{warning}</span>)}

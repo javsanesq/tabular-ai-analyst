@@ -137,6 +137,11 @@ def _semantic_plan(
         *_semantic_filters(lowered_question, profile, categorical_cols, label_col),
         *_time_filters(lowered_question, profile, date_cols),
     ]
+    value_search = _value_search_step(lowered_question, profile, categorical_cols, label_col, filters)
+
+    comparison_plan = _comparison_plan(lowered_question, numeric_cols, categorical_cols, date_cols)
+    if comparison_plan:
+        return comparison_plan
 
     ranking_intent = _ranking_intent(lowered_question)
     if ranking_intent == "popularity_desc" or ranking_intent == "popularity_asc":
@@ -157,25 +162,26 @@ def _semantic_plan(
             f"I treated {proxy} as the popularity proxy.",
             f"Rows with the {direction} {proxy}",
             filters=filters,
+            value_search=value_search,
         )
 
     if ranking_intent == "quality_desc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'best' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters, value_search=value_search)
 
     if ranking_intent == "quality_asc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'worst' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(profile, label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters, value_search=value_search)
 
     if any(term in lowered_question for term in ["recent", "newest", "latest"]):
         proxy = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
         if not proxy:
             return _clarify("Which date or year column should define recency for this dataset?", columns)
-        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters, value_search=value_search)
 
     if any(term in lowered_question for term in ["distribution", "histogram"]):
         metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "measure") or (numeric_cols[0] if numeric_cols else None)
@@ -204,6 +210,46 @@ def _semantic_plan(
     return None
 
 
+def _comparison_plan(lowered_question: str, numeric_cols: list[str], categorical_cols: list[str], date_cols: list[str]) -> dict[str, Any] | None:
+    metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "popularity") or _best_semantic_column(numeric_cols, "measure")
+    group = _mentioned_column(categorical_cols, lowered_question) or (categorical_cols[0] if categorical_cols else None)
+    if _has_any(lowered_question, ["trend", "over time", "timeline", "by year", "across years"]):
+        time_col = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
+        if not metric or not time_col:
+            return None
+        return {
+            "steps": [
+                {"tool": "run_transform", "arguments": {"select": [time_col, metric], "filters": [{"column": metric, "op": "not_null", "value": None}], "sort_by": time_col, "sort_desc": False, "limit": 200}},
+                {"tool": "create_chart", "arguments": {"chart_type": "line", "x": time_col, "y": metric, "color": None, "title": f"{metric} over {time_col}"}},
+            ],
+            "assumptions": [f"I used {time_col} as the time axis and {metric} as the metric."],
+        }
+    if _has_any(lowered_question, ["market share", "share", "total by", "sum by"]):
+        if not metric or not group:
+            return None
+        alias = f"{metric}_sum"
+        return {
+            "steps": [
+                {"tool": "run_transform", "arguments": {"group_by": [group], "aggregations": {metric: "sum"}, "sort_by": alias, "sort_desc": True, "limit": 20}},
+                {"tool": "create_chart", "arguments": {"chart_type": "bar", "x": group, "y": alias, "color": None, "title": f"Total {metric} by {group}"}},
+            ],
+            "assumptions": [f"I grouped by {group} and summed {metric}."],
+        }
+    if _has_any(lowered_question, ["average", "mean", "compare", "highest average", "lowest average"]):
+        if not metric or not group:
+            return None
+        alias = f"{metric}_mean"
+        descending = not _has_any(lowered_question, ["lowest", "smallest", "worst"])
+        return {
+            "steps": [
+                {"tool": "run_transform", "arguments": {"group_by": [group], "aggregations": {metric: "mean"}, "sort_by": alias, "sort_desc": descending, "limit": 20}},
+                {"tool": "create_chart", "arguments": {"chart_type": "bar", "x": group, "y": alias, "color": None, "title": f"Average {metric} by {group}"}},
+            ],
+            "assumptions": [f"I grouped by {group} and averaged {metric}."],
+        }
+    return None
+
+
 def _ranking_plan(
     profile: dict[str, Any],
     label_col: str | None,
@@ -214,6 +260,7 @@ def _ranking_plan(
     title: str,
     chart: bool = True,
     filters: list[dict[str, Any]] | None = None,
+    value_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = []
     if label_col and label_col != metric_col:
@@ -230,7 +277,10 @@ def _ranking_plan(
     transform_args: dict[str, Any] = {"select": selected, "sort_by": metric_col, "sort_desc": descending, "limit": limit}
     if transform_filters:
         transform_args["filters"] = transform_filters
-    steps = [{"tool": "run_transform", "arguments": transform_args}]
+    steps = []
+    if value_search:
+        steps.append({"tool": "find_matching_values", "arguments": value_search})
+    steps.append({"tool": "run_transform", "arguments": transform_args})
     if chart and label_col:
         steps.append({"tool": "create_chart", "arguments": {"chart_type": "bar", "x": label_col, "y": metric_col, "color": None, "title": title}})
     assumptions = [assumption]
@@ -240,6 +290,33 @@ def _ranking_plan(
     if missing_count:
         assumptions.append(f"I excluded {missing_count} row(s) with missing {metric_col} before ranking.")
     return {"steps": steps, "assumptions": assumptions}
+
+
+def _value_search_step(
+    lowered_question: str,
+    profile: dict[str, Any],
+    categorical_cols: list[str],
+    label_col: str | None,
+    filters: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    terms = _unresolved_filter_terms(lowered_question, profile, filters)
+    columns = [column for column in categorical_cols if not (column == label_col and _is_identifier_label(column))]
+    if not terms or not columns:
+        return None
+    return {"terms": terms, "columns": columns[:12], "limit": 5}
+
+
+def _unresolved_filter_terms(lowered_question: str, profile: dict[str, Any], filters: list[dict[str, Any]]) -> list[str]:
+    known_tokens = set(_analysis_stopwords())
+    known_tokens.update(str(filter_.get("value", "")).lower() for filter_ in filters)
+    for column in profile.get("columns", []):
+        known_tokens.update(_column_tokens(column.get("name", "")))
+    terms = []
+    for token in _column_tokens(lowered_question):
+        if token in known_tokens or token.isdigit() or len(token) < 3:
+            continue
+        terms.append(token)
+    return terms[:4]
 
 
 def _format_filter(filt: dict[str, Any]) -> str:
@@ -342,28 +419,57 @@ def _phrase_in_question(phrase: str, lowered_question: str) -> bool:
 
 
 def _value_tokens(value: str) -> list[str]:
-    stopwords = {
-        "all",
-        "best",
-        "chart",
-        "game",
-        "games",
-        "graph",
-        "most",
-        "of",
-        "popular",
-        "the",
-        "time",
-        "video",
-        "videogame",
-        "videogames",
-        "with",
-    }
+    stopwords = _analysis_stopwords()
     return [
         token
         for token in _column_tokens(value)
         if len(token) >= 3 and token not in stopwords
     ]
+
+
+def _analysis_stopwords() -> set[str]:
+    return {
+        "all",
+        "analysis",
+        "and",
+        "answer",
+        "average",
+        "best",
+        "between",
+        "bottom",
+        "chart",
+        "compare",
+        "data",
+        "dataset",
+        "from",
+        "game",
+        "games",
+        "give",
+        "graph",
+        "highest",
+        "least",
+        "lowest",
+        "main",
+        "me",
+        "most",
+        "of",
+        "popular",
+        "selling",
+        "show",
+        "sold",
+        "sort",
+        "the",
+        "time",
+        "top",
+        "trend",
+        "video",
+        "videogame",
+        "videogames",
+        "with",
+        "wine",
+        "wines",
+        "worst",
+    }
 
 
 def _clarify(question: str, candidate_columns: list[str]) -> dict[str, Any]:
@@ -549,6 +655,17 @@ def _tool_schemas(columns: list[str]) -> list[dict[str, Any]]:
                 "sort_by": _nullable_string(column_enum),
                 "sort_desc": {"type": ["boolean", "null"]},
                 "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 500},
+            }),
+            "strict": True,
+        },
+        {
+            "type": "function",
+            "name": "find_matching_values",
+            "description": "Search bounded categorical dataset columns for values mentioned by the user. Use this only to resolve safe filters before a transformation.",
+            "parameters": _strict_object({
+                "terms": _nullable_string_array(),
+                "columns": _nullable_string_array(column_enum),
+                "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 20},
             }),
             "strict": True,
         },

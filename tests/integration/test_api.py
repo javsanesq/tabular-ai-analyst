@@ -20,7 +20,7 @@ def test_upload_question_history_and_eval(client):
     assert question.status_code == 200, question.text
     analysis = question.json()
     assert analysis["tool_calls"]
-    assert analysis["validation"]["sql_safety"] == "passed"
+    assert analysis["validation"]["transform_validation"] == "passed"
     assert analysis["charts"]
 
     history = client.get(f"/api/v1/datasets/{dataset['id']}/analyses")
@@ -236,3 +236,28 @@ def test_semantic_worst_selling_question_sorts_sales_ascending_and_excludes_miss
     transform_call = next(call for call in analysis["tool_calls"] if call["tool"] == "run_transform")
     assert transform_call["arguments"]["sort_desc"] is False
     assert {"column": "Global_Sales", "op": "not_null", "value": None} in transform_call["arguments"]["filters"]
+
+
+def test_semantic_question_uses_value_search_for_rare_category_values(client):
+    rows = [
+        {"Name": f"Common Game {idx}", "Publisher": f"Common Publisher {idx}", "Genre": "Action", "Global_Sales": 1.0 + idx}
+        for idx in range(55)
+    ]
+    rows.append({"Name": "Persona 5", "Publisher": "Atlus", "Genre": "Role-Playing", "Global_Sales": 8.0})
+    payload = BytesIO(pd.DataFrame(rows).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("rare_publisher_games.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Show me the most popular Atlus video games."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert any(call["tool"] == "find_matching_values" for call in analysis["tool_calls"])
+    transform_call = next(call for call in analysis["tool_calls"] if call["tool"] == "run_transform")
+    assert {"column": "Publisher", "op": "contains", "value": "Atlus"} in transform_call["arguments"]["filters"]
+    assert analysis["tables"][0]["rows"][0]["Name"] == "Persona 5"
+    assert any(chip["label"] == "Filter: Publisher contains Atlus" for chip in analysis["reasoning"])

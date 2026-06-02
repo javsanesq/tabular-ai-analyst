@@ -60,6 +60,11 @@ const analysis = {
   warnings: ["Duplicate rows detected."],
   validation: { sql_safety: "passed", chart_validation: "passed", transform_validation: "not_run", blocked: false, tool_error: null },
   trace: { plan: {}, executed_tools: [] },
+  reasoning: [
+    { kind: "metric", label: "Metric: alcohol" },
+    { kind: "filter", label: "Filter: color contains white" },
+    { kind: "sort", label: "Sort: descending" }
+  ],
   suggested_followups: ["Show the strongest data-quality risks."]
 };
 
@@ -75,7 +80,20 @@ const blockedAnalysis = {
   validation: { sql_safety: "not_run", chart_validation: "not_run", transform_validation: "not_run", blocked: true, tool_error: null }
 };
 
-async function mockWorkbenchApi(page: Page, options: { history?: unknown[] } = {}) {
+const clarificationAnalysis = {
+  ...analysis,
+  id: "analysis-clarify",
+  question: "Show me the top customers.",
+  answer: "Which numeric column should define this ranking? Candidate columns: revenue, orders.",
+  tables: [],
+  charts: [],
+  tool_calls: [],
+  validation: { sql_safety: "not_run", chart_validation: "not_run", transform_validation: "not_run", blocked: false, clarification_required: true, tool_error: null },
+  reasoning: [],
+  suggested_followups: ["Use revenue for this analysis.", "Use orders for this analysis."]
+};
+
+async function mockWorkbenchApi(page: Page, options: { history?: unknown[]; onQuestion?: (body: string) => void } = {}) {
   await page.route("**/api/v1/datasets", async (route) => {
     await route.fulfill({ json: [datasetSummary] });
   });
@@ -93,7 +111,8 @@ async function mockWorkbenchApi(page: Page, options: { history?: unknown[] } = {
   });
   await page.route("**/api/v1/datasets/demo-wine/questions", async (route) => {
     const body = route.request().postData() || "";
-    await route.fulfill({ json: body.includes("Run Python") ? blockedAnalysis : analysis });
+    options.onQuestion?.(body);
+    await route.fulfill({ json: body.includes("Run Python") ? blockedAnalysis : body.includes("top customers") && !body.includes("Use revenue") ? clarificationAnalysis : analysis });
   });
 }
 
@@ -114,6 +133,8 @@ test("runs a governed analysis from the analyst workbench", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "Analyst Answer" })).toBeVisible();
   await expect(answer.getByText("Validated", { exact: true })).toBeVisible();
   await expect(page.getByText("A validated Plotly chart was generated")).toBeVisible();
+  await expect(answer.getByText("Metric: alcohol")).toBeVisible();
+  await expect(answer.getByText("Filter: color contains white")).toBeVisible();
   await expect(answer.getByText("query_result · 2 rows")).toBeVisible();
   await expect(answer.getByText("avg_alcohol", { exact: true })).toBeVisible();
   await expect(page.locator(".plot")).toBeVisible();
@@ -187,4 +208,19 @@ test("surfaces API errors when the demo token is invalid", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByText("Invalid or missing demo token.")).toBeVisible();
+});
+
+test("runs clarification follow-ups with the original question context", async ({ page }) => {
+  const requests: string[] = [];
+  await mockWorkbenchApi(page, { onQuestion: (body) => requests.push(body) });
+  await page.goto("/");
+  await page.getByRole("button", { name: /wine_quality_subset\.csv/ }).click();
+
+  await page.locator("textarea").fill("Show me the top customers.");
+  await page.getByRole("button", { name: "Run analysis" }).click();
+  await expect(page.getByText("Which numeric column should define this ranking?")).toBeVisible();
+
+  await page.getByRole("button", { name: "Use revenue for this analysis." }).click();
+
+  expect(requests.at(-1)).toContain("Show me the top customers. Use revenue for this analysis.");
 });
