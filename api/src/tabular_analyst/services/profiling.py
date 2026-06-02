@@ -49,6 +49,12 @@ def profile_dataframe(df: pd.DataFrame, sample_size: int = 20) -> dict[str, Any]
                 "min": clean_dates.min().isoformat() if not clean_dates.empty else None,
                 "max": clean_dates.max().isoformat() if not clean_dates.empty else None,
             }
+        if dtype == "categorical":
+            counts = non_null.astype(str).value_counts().head(50)
+            stats["top_values"] = [
+                {"value": _json_safe(value), "count": int(count)}
+                for value, count in counts.items()
+            ]
         columns.append(stats)
     return {
         "row_count": int(len(df)),

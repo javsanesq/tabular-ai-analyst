@@ -25,6 +25,11 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     df = read_dataframe(_dataset_path(settings, dataset), settings)
     profile = dataset.profile_json or profile_dataframe(df)
     issues = dataset.issues_json or detect_quality_issues(df)
+    if _profile_needs_refresh(profile):
+        profile = profile_dataframe(df)
+        dataset.profile_json = profile
+        session.add(dataset)
+        session.commit()
     planner = build_planner(settings)
     plan = planner.plan(question, profile, issues)
     tool_calls: list[dict] = []
@@ -146,3 +151,10 @@ def _suggested_followups(plan: dict) -> list[str]:
         "Create a chart for the most important numeric column.",
         "Compare averages across the main category.",
     ]
+
+
+def _profile_needs_refresh(profile: dict) -> bool:
+    return any(
+        column.get("inferred_type") == "categorical" and "top_values" not in column
+        for column in profile.get("columns", [])
+    )

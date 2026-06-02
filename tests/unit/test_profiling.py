@@ -10,6 +10,7 @@ def test_profile_infers_numeric_and_quality_issues():
     assert profile["row_count"] == 4
     assert profile["column_count"] == 3
     assert any(col["name"] == "value" and col["inferred_type"] == "numeric" for col in profile["columns"])
+    category = next(col for col in profile["columns"] if col["name"] == "category")
+    assert category["top_values"][0] == {"value": "a", "count": 2}
     assert any(issue["type"] == "missingness" for issue in issues)
     assert any(issue["type"] == "constant_column" for issue in issues)
-

@@ -136,3 +136,53 @@ def test_deterministic_planner_recognizes_date_like_numeric_columns() -> None:
     assert transform["arguments"]["select"] == ["Game_Title", "Release_Year"]
     assert transform["arguments"]["sort_by"] == "Release_Year"
     assert transform["arguments"]["sort_desc"] is True
+
+
+def test_deterministic_planner_filters_semantic_ranking_by_publisher_value() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical", "top_values": [{"value": "Gran Turismo", "count": 1}]},
+            {"name": "Publisher", "inferred_type": "categorical", "top_values": [{"value": "Sony Computer Entertainment", "count": 2}]},
+            {"name": "Genre", "inferred_type": "categorical", "top_values": [{"value": "Sports", "count": 1}]},
+            {"name": "Global_Sales", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Give me a graph with the most popular Sony video games of all time.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [{"column": "Publisher", "op": "contains", "value": "sony"}]
+    assert transform["arguments"]["select"] == ["Name", "Publisher", "Global_Sales"]
+    assert "Publisher contains sony" in plan["assumptions"][1]
+
+
+def test_deterministic_planner_filters_semantic_ranking_by_genre_value() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical", "top_values": [{"value": "FIFA 10", "count": 1}]},
+            {"name": "Publisher", "inferred_type": "categorical", "top_values": [{"value": "Electronic Arts", "count": 2}]},
+            {"name": "Genre", "inferred_type": "categorical", "top_values": [{"value": "Sports", "count": 2}]},
+            {"name": "Global_Sales", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Give me a graph with the most popular sports video games of all time.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [{"column": "Genre", "op": "contains", "value": "Sports"}]
+    assert transform["arguments"]["select"] == ["Name", "Genre", "Global_Sales"]
+
+
+def test_deterministic_planner_filters_category_even_when_it_is_display_label() -> None:
+    profile = {
+        "columns": [
+            {"name": "color", "inferred_type": "categorical", "top_values": [{"value": "red", "count": 5}, {"value": "white", "count": 5}]},
+            {"name": "quality", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show me the best red wines.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [{"column": "color", "op": "contains", "value": "red"}]
+    assert transform["arguments"]["select"] == ["color", "quality"]

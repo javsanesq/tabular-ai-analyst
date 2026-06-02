@@ -133,6 +133,7 @@ def _semantic_plan(
     columns = [col["name"] for col in profile.get("columns", [])]
     label_col = _best_label_column(categorical_cols) or (categorical_cols[0] if categorical_cols else (columns[0] if columns else None))
     limit = _requested_limit(lowered_question)
+    filters = _semantic_filters(lowered_question, profile, categorical_cols, label_col)
 
     if any(term in lowered_question for term in ["popular", "most played", "most downloaded", "most sold"]):
         proxy = _best_semantic_column(numeric_cols, "popularity")
@@ -141,25 +142,25 @@ def _semantic_plan(
                 "I can rank popularity only if the dataset has a popularity proxy such as sales, downloads, owners, players, ratings count, reviews, or revenue. Which column should I use?",
                 columns,
             )
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the popularity proxy.", "Most popular rows")
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the popularity proxy.", "Most popular rows", filters=filters)
 
     if any(term in lowered_question for term in ["best", "top rated", "highest rated"]):
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'best' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}")
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters)
 
     if any(term in lowered_question for term in ["worst", "lowest rated", "least rated"]):
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'worst' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}")
+        return _ranking_plan(label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters)
 
     if any(term in lowered_question for term in ["recent", "newest", "latest"]):
         proxy = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
         if not proxy:
             return _clarify("Which date or year column should define recency for this dataset?", columns)
-        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False)
+        return _ranking_plan(label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters)
 
     if any(term in lowered_question for term in ["distribution", "histogram"]):
         metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "measure") or (numeric_cols[0] if numeric_cols else None)
@@ -188,15 +189,100 @@ def _semantic_plan(
     return None
 
 
-def _ranking_plan(label_col: str | None, metric_col: str, limit: int, descending: bool, assumption: str, title: str, chart: bool = True) -> dict[str, Any]:
+def _ranking_plan(
+    label_col: str | None,
+    metric_col: str,
+    limit: int,
+    descending: bool,
+    assumption: str,
+    title: str,
+    chart: bool = True,
+    filters: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     selected = []
     if label_col and label_col != metric_col:
         selected.append(label_col)
+    for filt in filters or []:
+        column = filt["column"]
+        if column not in selected and column != metric_col:
+            selected.append(column)
     selected.append(metric_col)
-    steps = [{"tool": "run_transform", "arguments": {"select": selected, "sort_by": metric_col, "sort_desc": descending, "limit": limit}}]
+    transform_args: dict[str, Any] = {"select": selected, "sort_by": metric_col, "sort_desc": descending, "limit": limit}
+    if filters:
+        transform_args["filters"] = filters
+    steps = [{"tool": "run_transform", "arguments": transform_args}]
     if chart and label_col:
         steps.append({"tool": "create_chart", "arguments": {"chart_type": "bar", "x": label_col, "y": metric_col, "color": None, "title": title}})
-    return {"steps": steps, "assumptions": [assumption]}
+    assumptions = [assumption]
+    if filters:
+        filter_text = ", ".join(f"{filt['column']} contains {filt['value']}" for filt in filters)
+        assumptions.append(f"I filtered the ranking to rows where {filter_text}.")
+    return {"steps": steps, "assumptions": assumptions}
+
+
+def _semantic_filters(lowered_question: str, profile: dict[str, Any], categorical_cols: list[str], label_col: str | None) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for column in profile.get("columns", []):
+        name = column["name"]
+        if name not in categorical_cols or (name == label_col and _is_identifier_label(name)):
+            continue
+        match = _matched_categorical_value(lowered_question, column)
+        if match and not any(existing["column"] == name for existing in matches):
+            matches.append({"column": name, "op": "contains", "value": match})
+    return matches[:3]
+
+
+def _is_identifier_label(column: str) -> bool:
+    tokens = _column_tokens(column)
+    return any(token in tokens for token in ["id", "name", "title", "game", "videogame", "movie", "product"])
+
+
+def _matched_categorical_value(lowered_question: str, column: dict[str, Any]) -> str | None:
+    values = [item.get("value") for item in column.get("top_values", [])]
+    values.extend(column.get("examples", []))
+    for raw_value in values:
+        if raw_value is None:
+            continue
+        value = str(raw_value).strip()
+        if not value:
+            continue
+        lowered_value = value.lower()
+        if _phrase_in_question(lowered_value, lowered_question):
+            return value
+        for token in _value_tokens(lowered_value):
+            if _phrase_in_question(token, lowered_question):
+                return token
+    return None
+
+
+def _phrase_in_question(phrase: str, lowered_question: str) -> bool:
+    pattern = rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])"
+    return bool(re.search(pattern, lowered_question))
+
+
+def _value_tokens(value: str) -> list[str]:
+    stopwords = {
+        "all",
+        "best",
+        "chart",
+        "game",
+        "games",
+        "graph",
+        "most",
+        "of",
+        "popular",
+        "the",
+        "time",
+        "video",
+        "videogame",
+        "videogames",
+        "with",
+    }
+    return [
+        token
+        for token in _column_tokens(value)
+        if len(token) >= 3 and token not in stopwords
+    ]
 
 
 def _clarify(question: str, candidate_columns: list[str]) -> dict[str, Any]:

@@ -152,3 +152,57 @@ def test_semantic_question_asks_for_clarification_when_data_cannot_support_it(cl
     assert analysis["charts"] == []
     assert "Which column should I use?" in analysis["answer"]
     assert "Name" in analysis["answer"]
+
+
+def test_semantic_popularity_question_filters_by_publisher_value(client):
+    payload = BytesIO(pd.DataFrame(
+        {
+            "Name": ["Gran Turismo", "God of War", "Mario Kart", "FIFA 10"],
+            "Publisher": ["Sony Computer Entertainment", "Sony Computer Entertainment", "Nintendo", "Electronic Arts"],
+            "Genre": ["Racing", "Action", "Racing", "Sports"],
+            "Global_Sales": [10.8, 4.6, 35.0, 3.2],
+        }
+    ).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("publisher_games.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Give me a graph with the most popular Sony video games of all time."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert "Publisher contains sony" in analysis["answer"]
+    assert analysis["tables"][0]["row_count"] == 2
+    assert [row["Name"] for row in analysis["tables"][0]["rows"]] == ["Gran Turismo", "God of War"]
+    assert all("Sony" in row["Publisher"] for row in analysis["tables"][0]["rows"])
+    assert analysis["charts"]
+
+
+def test_semantic_popularity_question_filters_by_genre_value(client):
+    payload = BytesIO(pd.DataFrame(
+        {
+            "Name": ["Gran Turismo", "God of War", "Mario Kart", "FIFA 10"],
+            "Publisher": ["Sony Computer Entertainment", "Sony Computer Entertainment", "Nintendo", "Electronic Arts"],
+            "Genre": ["Racing", "Action", "Racing", "Sports"],
+            "Global_Sales": [10.8, 4.6, 35.0, 3.2],
+        }
+    ).to_csv(index=False).encode("utf-8"))
+    upload = client.post("/api/v1/datasets/upload", files={"file": ("genre_games.csv", payload, "text/csv")})
+    assert upload.status_code == 200, upload.text
+    dataset = upload.json()
+
+    response = client.post(
+        f"/api/v1/datasets/{dataset['id']}/questions",
+        json={"question": "Give me a graph with the most popular sports video games of all time."},
+    )
+    assert response.status_code == 200, response.text
+    analysis = response.json()
+
+    assert "Genre contains Sports" in analysis["answer"]
+    assert analysis["tables"][0]["row_count"] == 1
+    assert analysis["tables"][0]["rows"][0]["Name"] == "FIFA 10"
+    assert analysis["tables"][0]["rows"][0]["Genre"] == "Sports"
+    assert analysis["charts"]
