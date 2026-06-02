@@ -17,7 +17,7 @@ This is designed as a flagship AI engineering portfolio project: it is not a gen
 - Plotly chart generation from validated chart specs.
 - Structured analyst responses with warnings, validation status, and replayable traces.
 - Postgres-backed dataset metadata, analysis history, and eval runs.
-- Benchmark harness with safety traps and deterministic scoring.
+- Benchmark harness with safety traps, result-shape checks, and expected-value assertions for curated cases.
 - Docker Compose, Fly.io deployment config, CI, security docs, and a polished React workbench.
 
 ## Stack
@@ -67,10 +67,11 @@ The React UI includes a demo-token field.
 
 ## Demo Datasets
 
-The UI can load two built-in demo subsets without manually uploading files:
+The UI can load three built-in demo subsets without manually uploading files:
 
 - Wine Quality: useful for averages, grouping, quality checks, and duplicate detection.
 - OWID CO2: useful for trend charts and country comparisons.
+- Video Games: useful for semantic ranking questions such as best-selling, worst-selling, publisher filters, genre filters, and year ranges.
 
 API equivalent:
 
@@ -103,7 +104,7 @@ npm run dev
 make benchmark
 ```
 
-The benchmark loads the Wine Quality demo subset, runs governed-analysis eval cases, and writes `docs/benchmark-report.md`. It currently checks tool selection, blocked unsafe requests, chart expectations, and result table shape.
+The benchmark loads the Wine Quality and Video Games demo subsets, runs governed-analysis eval cases, and writes `docs/benchmark-report.md`. It checks tool selection, blocked unsafe requests, chart expectations, result table shape, and expected ordered rows for the most failure-prone semantic ranking cases.
 
 ## Docker Smoke
 
@@ -143,6 +144,8 @@ The model is never trusted with arbitrary execution. It can only select from the
 - `run_transform`
 - `create_chart`
 - `summarize_result`
+
+The OpenAI planner can also request `find_matching_values` to resolve categorical terms before a bounded transform. The backend validates and applies those matches; exact row values use equality filters and broader entity matches use bounded contains filters.
 
 SQL must be read-only `SELECT`/CTE over the registered `dataset` table. DDL, DML, file access, extension installation, network-style table functions, unsafe pragmas, multi-statement queries, schema-qualified reads, information-schema reads, and arbitrary table names are blocked.
 

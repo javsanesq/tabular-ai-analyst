@@ -3,8 +3,8 @@ import re
 import duckdb
 import pandas as pd
 import sqlglot
-from sqlglot import exp
 from fastapi import HTTPException, status
+from sqlglot import exp
 
 FORBIDDEN = {
     "attach", "copy", "create", "delete", "drop", "export", "import", "insert", "install",
@@ -50,12 +50,14 @@ def _validate_table_scope(expression: exp.Expression) -> None:
             )
 
 
-def run_safe_sql(df: pd.DataFrame, sql: str, limit: int = 100) -> dict:
+def run_safe_sql(df: pd.DataFrame, sql: str, limit: int = 500) -> dict:
     query = validate_readonly_sql(sql)
     capped = f"SELECT * FROM ({query}) AS governed_result LIMIT {min(limit, 500)}"
     con = duckdb.connect(database=":memory:")
     try:
         con.execute("SET enable_external_access=false")
+        con.execute("SET threads=1")
+        con.execute("SET memory_limit='512MB'")
         con.register("dataset", df)
         result = con.execute(capped).fetchdf()
     finally:
@@ -66,4 +68,5 @@ def run_safe_sql(df: pd.DataFrame, sql: str, limit: int = 100) -> dict:
         "row_count": int(len(result)),
         "columns": [str(col) for col in result.columns],
         "rows": result.where(pd.notna(result), None).to_dict(orient="records"),
+        "limited": bool(len(result) >= min(limit, 500)),
     }

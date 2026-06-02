@@ -29,6 +29,8 @@ jobs:
           DATABASE_URL: "sqlite+pysqlite:///:memory:"
           DATA_DIR: "data/test"
         run: pytest -q
+      - name: Backend lint
+        run: ruff check api/src tests
       - name: Benchmark smoke
         env:
           PYTHONPATH: "api/src"
@@ -44,7 +46,8 @@ jobs:
       - name: Frontend build
         run: |
           cd ui
-          npm install
+          npm ci
+          npm run typecheck
           npm run build
       - name: Frontend E2E
         run: |
@@ -55,3 +58,7 @@ jobs:
         run: |
           bash -n scripts/smoke_docker.sh
           docker compose config >/tmp/tabular-compose.yml
+      - name: Docker image builds
+        run: |
+          docker build -f api/Dockerfile -t tabular-ai-analyst-api:ci .
+          docker build -f ui/Dockerfile -t tabular-ai-analyst-ui:ci .

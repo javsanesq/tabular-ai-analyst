@@ -14,12 +14,22 @@ def find_matching_values(df: pd.DataFrame, terms: list[str], columns: list[str] 
             series = df[column].dropna().astype(str)
             if series.empty:
                 continue
-            exact = series.str.lower() == normalized_term
-            contains = series.str.lower().str.contains(normalized_term, regex=False)
+            normalized = series.str.lower()
+            contains = normalized.str.contains(normalized_term, regex=False)
             for value, count in series[contains].value_counts().head(limit).items():
                 value_text = str(value)
-                score = 3 if value_text.lower() == normalized_term else 2 if exact.any() else 1
-                matches.append({"term": term, "column": column, "value": value_text, "count": int(count), "score": score})
+                value_normalized = value_text.lower()
+                is_exact_value = value_normalized == normalized_term
+                match_type = "exact" if is_exact_value else "contains"
+                score = 3 if is_exact_value else 1
+                matches.append({
+                    "term": term,
+                    "column": column,
+                    "value": value_text,
+                    "count": int(count),
+                    "score": score,
+                    "match_type": match_type,
+                })
     matches.sort(key=lambda row: (row["score"], row["count"]), reverse=True)
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()

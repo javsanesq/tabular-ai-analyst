@@ -41,21 +41,31 @@ def run_transform(df: pd.DataFrame, spec: TransformSpec) -> dict[str, Any]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown group columns: {missing}")
         aggregations = {col: agg for col, agg in spec.aggregations.items() if col in work.columns}
         if not aggregations:
-            aggregations = {work.columns[0]: "count"}
-        work = work.groupby(spec.group_by, dropna=False).agg(aggregations).reset_index()
-        work.columns = ["_".join(col).strip("_") if isinstance(col, tuple) else str(col) for col in work.columns]
-        rename_map = {column: f"{column}_{agg}" for column, agg in aggregations.items() if column in work.columns}
-        work = work.rename(columns=rename_map)
+            work = work.groupby(spec.group_by, dropna=False).size().reset_index(name="row_count")
+            if spec.sort_by is None:
+                spec.sort_by = "row_count"
+                spec.sort_desc = True
+        else:
+            work = work.groupby(spec.group_by, dropna=False).agg(aggregations).reset_index()
+            work.columns = ["_".join(col).strip("_") if isinstance(col, tuple) else str(col) for col in work.columns]
+            rename_map = {column: f"{column}_{agg}" for column, agg in aggregations.items() if column in work.columns}
+            work = work.rename(columns=rename_map)
+            if spec.sort_by in aggregations:
+                spec.sort_by = f"{spec.sort_by}_{aggregations[spec.sort_by]}"
     elif spec.select:
         missing = [col for col in spec.select if col not in work.columns]
         if missing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown selected columns: {missing}")
         work = work[spec.select]
-    if spec.sort_by and spec.sort_by in work.columns:
+    if spec.sort_by and spec.sort_by not in work.columns:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown sort column after transformation: {spec.sort_by}")
+    if spec.sort_by:
         work = work.sort_values(spec.sort_by, ascending=not spec.sort_desc)
+    limited = len(work) > spec.limit
     work = work.head(spec.limit)
     return {
         "row_count": int(len(work)),
         "columns": [str(col) for col in work.columns],
         "rows": work.where(pd.notna(work), None).to_dict(orient="records"),
+        "limited": bool(limited),
     }

@@ -6,18 +6,19 @@ from sqlalchemy.orm import Session
 
 from tabular_analyst.core.config import Settings, get_settings
 from tabular_analyst.core.db import get_session
-from tabular_analyst.core.security import require_demo_access
+from tabular_analyst.core.security import AuthContext, require_demo_access
 from tabular_analyst.domain.models import AnalysisRecord, DatasetRecord
 from tabular_analyst.domain.schemas import AnalysisResponse, DatasetDetail, DatasetSummary, QuestionRequest
 from tabular_analyst.services.analysis import answer_question
 from tabular_analyst.services.files import persist_upload, read_dataframe
 from tabular_analyst.services.profiling import detect_quality_issues, profile_dataframe
 
-router = APIRouter(prefix="/api/v1/datasets", dependencies=[Depends(require_demo_access)])
+router = APIRouter(prefix="/api/v1/datasets")
 
 DEMO_DATASETS = {
     "wine-quality": Path("samples/wine_quality_subset.csv"),
     "owid-co2": Path("samples/owid_co2_subset.csv"),
+    "video-games": Path("samples/video_games_subset.csv"),
 }
 
 
@@ -34,6 +35,7 @@ def _summary(record: DatasetRecord) -> DatasetSummary:
 @router.post("/upload", response_model=DatasetDetail)
 async def upload_dataset(
     file: UploadFile = File(...),
+    auth: AuthContext = Depends(require_demo_access),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> DatasetDetail:
@@ -43,6 +45,7 @@ async def upload_dataset(
     issues = detect_quality_issues(df)
     record = DatasetRecord(
         id=dataset_id,
+        owner_hash=auth.owner_hash,
         stored_filename=stored_path.name,
         original_filename=file.filename or stored_path.name,
         content_type=content_type,
@@ -59,6 +62,7 @@ async def upload_dataset(
 @router.post("/demo/{demo_name}", response_model=DatasetDetail)
 def load_demo_dataset(
     demo_name: str,
+    auth: AuthContext = Depends(require_demo_access),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> DatasetDetail:
@@ -66,14 +70,16 @@ def load_demo_dataset(
     if not sample_path or not sample_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo dataset not found.")
     dataset_id = sample_path.stem.replace("_subset", "")
-    stored_path = settings.upload_dir / f"demo-{dataset_id}.csv"
+    scoped_dataset_id = f"demo-{dataset_id}-{auth.owner_hash[:12]}"
+    stored_path = settings.upload_dir / f"{scoped_dataset_id}.csv"
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     stored_path.write_bytes(sample_path.read_bytes())
     df = read_dataframe(stored_path, settings)
     profile = profile_dataframe(df)
     issues = detect_quality_issues(df)
     record = DatasetRecord(
-        id=f"demo-{dataset_id}",
+        id=scoped_dataset_id,
+        owner_hash=auth.owner_hash,
         stored_filename=stored_path.name,
         original_filename=sample_path.name,
         content_type="text/csv",
@@ -98,22 +104,26 @@ def load_demo_dataset(
 
 
 @router.get("", response_model=list[DatasetSummary])
-def list_datasets(session: Session = Depends(get_session)) -> list[DatasetSummary]:
-    records = session.scalars(select(DatasetRecord).order_by(DatasetRecord.created_at.desc())).all()
+def list_datasets(auth: AuthContext = Depends(require_demo_access), session: Session = Depends(get_session)) -> list[DatasetSummary]:
+    records = session.scalars(
+        select(DatasetRecord)
+        .where(DatasetRecord.owner_hash == auth.owner_hash)
+        .order_by(DatasetRecord.created_at.desc())
+    ).all()
     return [_summary(record) for record in records]
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetail)
-def get_dataset(dataset_id: str, session: Session = Depends(get_session)) -> DatasetDetail:
-    record = session.get(DatasetRecord, dataset_id)
+def get_dataset(dataset_id: str, auth: AuthContext = Depends(require_demo_access), session: Session = Depends(get_session)) -> DatasetDetail:
+    record = _get_owned_dataset(session, dataset_id, auth)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
     return DatasetDetail(**_summary(record).model_dump(), profile=record.profile_json, issues=record.issues_json)
 
 
 @router.get("/{dataset_id}/profile")
-def get_profile(dataset_id: str, session: Session = Depends(get_session)) -> dict:
-    record = session.get(DatasetRecord, dataset_id)
+def get_profile(dataset_id: str, auth: AuthContext = Depends(require_demo_access), session: Session = Depends(get_session)) -> dict:
+    record = _get_owned_dataset(session, dataset_id, auth)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
     return {"profile": record.profile_json, "issues": record.issues_json}
@@ -123,16 +133,33 @@ def get_profile(dataset_id: str, session: Session = Depends(get_session)) -> dic
 def ask_question(
     dataset_id: str,
     payload: QuestionRequest,
+    auth: AuthContext = Depends(require_demo_access),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> AnalysisResponse:
-    record = session.get(DatasetRecord, dataset_id)
+    record = _get_owned_dataset(session, dataset_id, auth)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
     return answer_question(session, settings, record, payload.question)
 
 
 @router.get("/{dataset_id}/analyses")
-def list_analyses(dataset_id: str, session: Session = Depends(get_session)) -> list[dict]:
-    records = session.scalars(select(AnalysisRecord).where(AnalysisRecord.dataset_id == dataset_id).order_by(AnalysisRecord.created_at.desc())).all()
+def list_analyses(dataset_id: str, auth: AuthContext = Depends(require_demo_access), session: Session = Depends(get_session)) -> list[dict]:
+    record = _get_owned_dataset(session, dataset_id, auth)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
+    records = session.scalars(
+        select(AnalysisRecord)
+        .where(AnalysisRecord.dataset_id == dataset_id)
+        .where(AnalysisRecord.owner_hash == auth.owner_hash)
+        .order_by(AnalysisRecord.created_at.desc())
+    ).all()
     return [{"id": row.id, "question": row.question, "created_at": row.created_at.isoformat(), **row.answer_json} for row in records]
+
+
+def _get_owned_dataset(session: Session, dataset_id: str, auth: AuthContext) -> DatasetRecord | None:
+    return session.scalar(
+        select(DatasetRecord)
+        .where(DatasetRecord.id == dataset_id)
+        .where(DatasetRecord.owner_hash == auth.owner_hash)
+    )

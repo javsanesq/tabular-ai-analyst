@@ -15,3 +15,4 @@ def test_find_matching_values_searches_bounded_categorical_columns():
     assert result["row_count"] == 2
     assert result["matches"][0]["column"] == "publisher"
     assert result["matches"][0]["value"] == "Atlus"
+    assert result["matches"][0]["match_type"] == "exact"

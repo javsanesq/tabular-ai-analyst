@@ -50,7 +50,7 @@ def test_demo_dataset_loader(client):
     response = client.post("/api/v1/datasets/demo/owid-co2")
     assert response.status_code == 200, response.text
     dataset = response.json()
-    assert dataset["id"] == "demo-owid_co2"
+    assert dataset["id"].startswith("demo-owid_co2-")
     assert dataset["row_count"] == 15
     assert any(column["name"] == "co2" for column in dataset["profile"]["columns"])
 
@@ -201,7 +201,7 @@ def test_semantic_popularity_question_filters_by_genre_value(client):
     assert response.status_code == 200, response.text
     analysis = response.json()
 
-    assert "Genre contains Sports" in analysis["answer"]
+    assert "Genre == Sports" in analysis["answer"]
     assert analysis["tables"][0]["row_count"] == 1
     assert analysis["tables"][0]["rows"][0]["Name"] == "FIFA 10"
     assert analysis["tables"][0]["rows"][0]["Genre"] == "Sports"
@@ -258,6 +258,6 @@ def test_semantic_question_uses_value_search_for_rare_category_values(client):
 
     assert any(call["tool"] == "find_matching_values" for call in analysis["tool_calls"])
     transform_call = next(call for call in analysis["tool_calls"] if call["tool"] == "run_transform")
-    assert {"column": "Publisher", "op": "contains", "value": "Atlus"} in transform_call["arguments"]["filters"]
+    assert {"column": "Publisher", "op": "==", "value": "Atlus"} in transform_call["arguments"]["filters"]
     assert analysis["tables"][0]["rows"][0]["Name"] == "Persona 5"
-    assert any(chip["label"] == "Filter: Publisher contains Atlus" for chip in analysis["reasoning"])
+    assert any(chip["label"] == "Filter: Publisher equals Atlus" for chip in analysis["reasoning"])

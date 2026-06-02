@@ -1,14 +1,17 @@
 import json
+import logging
 import re
 from typing import Any
 
 from tabular_analyst.core.config import Settings
 
+logger = logging.getLogger(__name__)
+
 
 class AnalystPlanner:
     def plan(self, question: str, profile: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
         lowered = question.lower()
-        if any(term in lowered for term in ["delete", "drop table", "run python", "read local", "open /", "system prompt", "overwrite", "export", "install", "copy to"]):
+        if _is_unsafe_request(lowered):
             return {"blocked": True, "reason": "Unsafe or out-of-scope request blocked by governed planner.", "steps": []}
         columns = [col["name"] for col in profile.get("columns", [])]
         numeric_cols = [col["name"] for col in profile.get("columns", []) if col.get("inferred_type") == "numeric"]
@@ -78,7 +81,7 @@ class OpenAIPlanner(AnalystPlanner):
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = OpenAI(api_key=self.settings.openai_api_key, timeout=20.0, max_retries=2)
             allowed_columns = [col["name"] for col in profile.get("columns", [])]
             tools = _tool_schemas(allowed_columns)
             response = client.responses.create(
@@ -108,6 +111,7 @@ class OpenAIPlanner(AnalystPlanner):
                 steps.append({"tool": "summarize_result", "arguments": {}})
             return {"blocked": False, "steps": steps}
         except Exception:
+            logger.warning("OpenAI planner failed; using deterministic governed planner", exc_info=True)
             return deterministic_plan
 
 
@@ -132,7 +136,7 @@ def _semantic_plan(
 ) -> dict[str, Any] | None:
     columns = [col["name"] for col in profile.get("columns", [])]
     label_col = _best_label_column(categorical_cols) or (categorical_cols[0] if categorical_cols else (columns[0] if columns else None))
-    limit = _requested_limit(lowered_question)
+    limit, limit_assumption = _requested_limit_info(lowered_question)
     filters = [
         *_semantic_filters(lowered_question, profile, categorical_cols, label_col),
         *_time_filters(lowered_question, profile, date_cols),
@@ -163,25 +167,26 @@ def _semantic_plan(
             f"Rows with the {direction} {proxy}",
             filters=filters,
             value_search=value_search,
+            extra_assumptions=[limit_assumption] if limit_assumption else None,
         )
 
     if ranking_intent == "quality_desc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'best' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters, value_search=value_search)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the ranking score.", f"Highest {proxy}", filters=filters, value_search=value_search, extra_assumptions=[limit_assumption] if limit_assumption else None)
 
     if ranking_intent == "quality_asc":
         proxy = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "quality")
         if not proxy:
             return _clarify("Which score or rating column should define 'worst' for this dataset?", numeric_cols or columns)
-        return _ranking_plan(profile, label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters, value_search=value_search)
+        return _ranking_plan(profile, label_col, proxy, limit, False, f"I treated {proxy} as the ranking score.", f"Lowest {proxy}", filters=filters, value_search=value_search, extra_assumptions=[limit_assumption] if limit_assumption else None)
 
     if any(term in lowered_question for term in ["recent", "newest", "latest"]):
         proxy = _mentioned_column(date_cols, lowered_question) or _best_semantic_column(date_cols, "time") or (date_cols[0] if date_cols else None)
         if not proxy:
             return _clarify("Which date or year column should define recency for this dataset?", columns)
-        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", f"Most recent rows", chart=False, filters=filters, value_search=value_search)
+        return _ranking_plan(profile, label_col, proxy, limit, True, f"I treated {proxy} as the recency column.", "Most recent rows", chart=False, filters=filters, value_search=value_search, extra_assumptions=[limit_assumption] if limit_assumption else None)
 
     if any(term in lowered_question for term in ["distribution", "histogram"]):
         metric = _mentioned_column(numeric_cols, lowered_question) or _best_semantic_column(numeric_cols, "measure") or (numeric_cols[0] if numeric_cols else None)
@@ -261,6 +266,7 @@ def _ranking_plan(
     chart: bool = True,
     filters: list[dict[str, Any]] | None = None,
     value_search: dict[str, Any] | None = None,
+    extra_assumptions: list[str] | None = None,
 ) -> dict[str, Any]:
     selected = []
     if label_col and label_col != metric_col:
@@ -284,6 +290,7 @@ def _ranking_plan(
     if chart and label_col:
         steps.append({"tool": "create_chart", "arguments": {"chart_type": "bar", "x": label_col, "y": metric_col, "color": None, "title": title}})
     assumptions = [assumption]
+    assumptions.extend(extra_assumptions or [])
     if filters:
         filter_text = ", ".join(_format_filter(filt) for filt in filters)
         assumptions.append(f"I filtered the ranking to rows where {filter_text}.")
@@ -366,7 +373,7 @@ def _semantic_filters(lowered_question: str, profile: dict[str, Any], categorica
             continue
         match = _matched_categorical_value(lowered_question, column)
         if match and not any(existing["column"] == name for existing in matches):
-            matches.append({"column": name, "op": "contains", "value": match})
+            matches.append({"column": name, "op": match["op"], "value": match["value"]})
     return matches[:3]
 
 
@@ -395,7 +402,7 @@ def _is_identifier_label(column: str) -> bool:
     return any(token in tokens for token in ["id", "name", "title", "game", "videogame", "movie", "product"])
 
 
-def _matched_categorical_value(lowered_question: str, column: dict[str, Any]) -> str | None:
+def _matched_categorical_value(lowered_question: str, column: dict[str, Any]) -> dict[str, str] | None:
     values = [item.get("value") for item in column.get("top_values", [])]
     values.extend(column.get("examples", []))
     for raw_value in values:
@@ -406,10 +413,10 @@ def _matched_categorical_value(lowered_question: str, column: dict[str, Any]) ->
             continue
         lowered_value = value.lower()
         if _phrase_in_question(lowered_value, lowered_question):
-            return value
+            return {"value": value, "op": "=="}
         for token in _value_tokens(lowered_value):
             if _phrase_in_question(token, lowered_question):
-                return token
+                return {"value": token, "op": "contains"}
     return None
 
 
@@ -481,11 +488,33 @@ def _clarify(question: str, candidate_columns: list[str]) -> dict[str, Any]:
 
 
 def _requested_limit(lowered_question: str) -> int:
+    return _requested_limit_info(lowered_question)[0]
+
+
+def _requested_limit_info(lowered_question: str) -> tuple[int, str | None]:
     for match in re.finditer(r"\b(?:top|first|best|show)?\s*(\d{1,3})\b", lowered_question):
         value = int(match.group(1))
         if 1 <= value <= 50:
-            return value
-    return 10
+            return value, None
+        if value > 50:
+            return 50, f"I capped the requested top-{value} output to the governed maximum of 50 rows."
+    return 10, None
+
+
+def _is_unsafe_request(lowered_question: str) -> bool:
+    unsafe_patterns = [
+        r"\bdelete\b",
+        r"\bdrop\s+table\b",
+        r"\brun\s+python\b",
+        r"\bread\s+local\b",
+        r"\bopen\s+/",
+        r"\bsystem\s+prompt\b",
+        r"\boverwrite\b",
+        r"\binstall\b",
+        r"\bcopy\s+to\b",
+        r"\bexport\b.*\b(file|csv|xlsx|disk|path|/tmp|local)\b",
+    ]
+    return any(re.search(pattern, lowered_question) for pattern in unsafe_patterns)
 
 
 def _best_label_column(categorical_cols: list[str]) -> str | None:
@@ -640,7 +669,10 @@ def _tool_schemas(columns: list[str]) -> list[dict[str, Any]]:
             "type": "function",
             "name": "run_safe_sql",
             "description": "Run one read-only SELECT/CTE query over the table named dataset. Never use DDL, DML, files, network, COPY, PRAGMA, INSTALL, LOAD, or multiple statements.",
-            "parameters": _strict_object({"sql": {"type": "string"}}),
+            "parameters": _strict_object({
+                "sql": {"type": "string"},
+                "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 500},
+            }),
             "strict": True,
         },
         {

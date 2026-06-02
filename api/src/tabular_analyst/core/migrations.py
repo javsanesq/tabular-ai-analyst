@@ -1,7 +1,8 @@
-from alembic import command
-from alembic.config import Config
 from pathlib import Path
 
+from alembic.config import Config
+
+from alembic import command
 from tabular_analyst.core.config import get_settings
 
 

@@ -170,8 +170,31 @@ def test_deterministic_planner_filters_semantic_ranking_by_genre_value() -> None
     plan = AnalystPlanner().plan("Give me a graph with the most popular sports video games of all time.", profile, [])
 
     transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
-    assert transform["arguments"]["filters"] == [{"column": "Genre", "op": "contains", "value": "Sports"}]
+    assert transform["arguments"]["filters"] == [{"column": "Genre", "op": "==", "value": "Sports"}]
     assert transform["arguments"]["select"] == ["Name", "Genre", "Global_Sales"]
+
+
+def test_deterministic_planner_uses_exact_filter_for_short_platform_values() -> None:
+    profile = {
+        "columns": [
+            {"name": "Name", "inferred_type": "categorical", "top_values": [{"value": "Game A", "count": 1}]},
+            {
+                "name": "Platform",
+                "inferred_type": "categorical",
+                "top_values": [
+                    {"value": "PS", "count": 1},
+                    {"value": "PS2", "count": 1},
+                    {"value": "PS4", "count": 1},
+                ],
+            },
+            {"name": "Global_Sales", "inferred_type": "numeric"},
+        ]
+    }
+
+    plan = AnalystPlanner().plan("Show the most popular PS games.", profile, [])
+
+    transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
+    assert transform["arguments"]["filters"] == [{"column": "Platform", "op": "==", "value": "PS"}]
 
 
 def test_deterministic_planner_filters_category_even_when_it_is_display_label() -> None:
@@ -185,7 +208,7 @@ def test_deterministic_planner_filters_category_even_when_it_is_display_label() 
     plan = AnalystPlanner().plan("Show me the best red wines.", profile, [])
 
     transform = next(step for step in plan["steps"] if step["tool"] == "run_transform")
-    assert transform["arguments"]["filters"] == [{"column": "color", "op": "contains", "value": "red"}]
+    assert transform["arguments"]["filters"] == [{"column": "color", "op": "==", "value": "red"}]
     assert transform["arguments"]["select"] == ["color", "quality"]
 
 

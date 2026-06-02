@@ -37,6 +37,7 @@ ui-e2e:
 	cd ui && npm run test:e2e
 
 lint:
+	cd api && $(PYTHON) -m ruff check src tests
 	cd api && $(PYTHON) -m compileall src
 	cd ui && npm run typecheck
 

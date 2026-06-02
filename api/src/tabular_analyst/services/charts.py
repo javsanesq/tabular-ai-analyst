@@ -3,8 +3,8 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
-from plotly.utils import PlotlyJSONEncoder
 from fastapi import HTTPException, status
+from plotly.utils import PlotlyJSONEncoder
 
 from tabular_analyst.domain.schemas import ChartSpec
 

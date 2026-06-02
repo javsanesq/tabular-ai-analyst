@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +17,8 @@ from tabular_analyst.services.profiling import detect_quality_issues, profile_da
 from tabular_analyst.services.sql_safety import run_safe_sql
 from tabular_analyst.services.transforms import run_transform
 from tabular_analyst.services.value_search import find_matching_values
+
+logger = logging.getLogger(__name__)
 
 
 def _dataset_path(settings: Settings, dataset: DatasetRecord) -> Path:
@@ -77,22 +80,26 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
                     if issues:
                         warnings.extend(issue["message"] for issue in issues[:5])
                 elif tool == "run_safe_sql":
-                    result = run_safe_sql(df, args["sql"])
+                    result = run_safe_sql(df, args["sql"], args.get("limit") or 500)
                     validation["sql_safety"] = "passed"
                     tables.append({"name": "query_result", **result})
                     last_table_df = pd.DataFrame(result["rows"])
                     record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
+                    if result.get("limited"):
+                        warnings.append("SQL result was limited to the governed maximum row count.")
                 elif tool == "run_transform":
-                    applied_match = _apply_value_search_filter(args, pending_value_matches)
-                    if applied_match:
+                    applied_matches = _apply_value_search_filters(args, pending_value_matches)
+                    for applied_match in applied_matches:
+                        operator_label = "equals" if applied_match["op"] == "==" else "contains"
                         answer_parts.append(
-                            f"Assumption: I matched '{applied_match['term']}' to {applied_match['column']} contains {applied_match['value']}."
+                            f"Assumption: I matched '{applied_match['term']}' to {applied_match['column']} {operator_label} {applied_match['value']}."
                         )
                         reasoning.append({
                             "kind": "filter",
-                            "label": f"{applied_match['column']} contains {applied_match['value']}",
+                            "label": f"{applied_match['column']} {operator_label} {applied_match['value']}",
                             "source": "value_search",
                         })
+                    if applied_matches:
                         record["arguments"] = args
                     reasoning.extend(_reasoning_from_transform(args, profile))
                     result = run_transform(df, TransformSpec(**args))
@@ -100,6 +107,8 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
                     tables.append({"name": "transform_result", **result})
                     last_table_df = pd.DataFrame(result["rows"])
                     record["result"] = {"row_count": result["row_count"], "columns": result["columns"]}
+                    if result.get("limited"):
+                        warnings.append("Transform result was limited to the requested governed row count.")
                 elif tool == "find_matching_values":
                     result = find_matching_values(df, args.get("terms") or [], args.get("columns"), args.get("limit") or 5)
                     pending_value_matches = result["matches"]
@@ -114,6 +123,9 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
                     answer_parts.append(f"Analyzed {profile['row_count']} rows and {profile['column_count']} columns using governed tools.")
                     if tables:
                         answer_parts.append(f"The main result returned {tables[-1]['row_count']} rows.")
+                        finding = _top_result_sentence(tables[-1])
+                        if finding:
+                            answer_parts.append(finding)
                     if issues:
                         answer_parts.append(f"I found {len(issues)} data-quality warning(s); review the inspector before making decisions.")
                     if charts:
@@ -123,6 +135,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
                     raise ValueError(f"Unsupported tool requested by planner: {tool}")
             except (HTTPException, KeyError, ValidationError, ValueError) as exc:
                 detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                logger.warning("Governed tool failed validation", extra={"tool": tool, "detail": detail})
                 record["status"] = "error"
                 record["error"] = detail
                 validation["tool_error"] = {"tool": tool, "detail": detail}
@@ -149,6 +162,7 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     analysis = AnalysisRecord(
         id=str(uuid4()),
         dataset_id=dataset.id,
+        owner_hash=dataset.owner_hash,
         question=question,
         answer_json=response_payload,
         tool_calls_json=tool_calls,
@@ -161,21 +175,31 @@ def answer_question(session: Session, settings: Settings, dataset: DatasetRecord
     return AnalysisResponse(id=analysis.id, dataset_id=dataset.id, question=question, **response_payload)
 
 
-def _apply_value_search_filter(args: dict, matches: list[dict]) -> dict | None:
+def _apply_value_search_filters(args: dict, matches: list[dict]) -> list[dict]:
     if not matches:
-        return None
+        return []
     filters = args.setdefault("filters", [])
     existing_columns = {filter_.get("column") for filter_ in filters if filter_.get("op") == "contains"}
+    existing_columns.update(filter_.get("column") for filter_ in filters if filter_.get("op") == "==")
     if existing_columns:
-        return None
+        existing_columns = {column for column in existing_columns if column}
     selected = args.setdefault("select", [])
+    applied: list[dict] = []
+    seen_terms: set[str] = set()
     for match in matches:
         column = match["column"]
+        term = str(match["term"]).lower()
+        if column in existing_columns or term in seen_terms:
+            continue
         if column not in selected:
             selected.insert(max(0, len(selected) - 1), column)
-        filters.append({"column": column, "op": "contains", "value": match["value"]})
-        return match
-    return None
+        op = "==" if match.get("match_type") == "exact" else "contains"
+        filters.append({"column": column, "op": op, "value": match["value"]})
+        applied_match = {**match, "op": op}
+        applied.append(applied_match)
+        existing_columns.add(column)
+        seen_terms.add(term)
+    return applied
 
 
 def _reasoning_from_transform(args: dict, profile: dict) -> list[dict]:
@@ -191,6 +215,8 @@ def _reasoning_from_transform(args: dict, profile: dict) -> list[dict]:
         value = filter_.get("value")
         if op == "contains":
             chips.append({"kind": "filter", "label": f"Filter: {column} contains {value}"})
+        elif op == "==":
+            chips.append({"kind": "filter", "label": f"Filter: {column} equals {value}"})
         elif op == "not_null":
             missing = _profile_missing_count(profile, column)
             label = f"Missing {column} excluded" if not missing else f"Missing {column} excluded ({missing} row(s))"
@@ -217,6 +243,29 @@ def _dedupe_reasoning(reasoning: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _top_result_sentence(table: dict) -> str | None:
+    rows = table.get("rows") or []
+    columns = table.get("columns") or []
+    if not rows or not columns:
+        return None
+    first = rows[0]
+    parts = []
+    for column in columns[:4]:
+        value = first.get(column)
+        if value is None:
+            continue
+        parts.append(f"{column}={_format_result_value(value)}")
+    if not parts:
+        return None
+    return "Top returned row: " + ", ".join(parts) + "."
+
+
+def _format_result_value(value) -> str:
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
 
 
 def _suggested_followups(plan: dict) -> list[str]:

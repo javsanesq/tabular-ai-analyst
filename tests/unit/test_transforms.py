@@ -37,3 +37,33 @@ def test_transform_names_grouped_aggregation_columns():
 
     assert result["columns"] == ["genre", "sales_mean"]
     assert result["rows"][0] == {"genre": "sports", "sales_mean": 15.0}
+
+
+def test_transform_resolves_grouped_sort_alias_from_bare_metric():
+    df = pd.DataFrame({"publisher": ["A", "B", "B"], "sales": [30, 10, 25]})
+    result = run_transform(
+        df,
+        TransformSpec(group_by=["publisher"], aggregations={"sales": "sum"}, sort_by="sales", sort_desc=True),
+    )
+
+    assert result["columns"] == ["publisher", "sales_sum"]
+    assert result["rows"][0] == {"publisher": "B", "sales_sum": 35}
+
+
+def test_transform_rejects_unknown_sort_after_transformation():
+    df = pd.DataFrame({"publisher": ["A", "B"], "sales": [30, 10]})
+
+    try:
+        run_transform(df, TransformSpec(group_by=["publisher"], aggregations={"sales": "sum"}, sort_by="missing"))
+    except Exception as exc:
+        assert "Unknown sort column" in str(exc)
+    else:
+        raise AssertionError("Expected unknown grouped sort to fail validation.")
+
+
+def test_transform_count_fallback_sorts_by_row_count():
+    df = pd.DataFrame({"genre": ["sports", "sports", "racing"]})
+    result = run_transform(df, TransformSpec(group_by=["genre"], aggregations={}, limit=2))
+
+    assert result["columns"] == ["genre", "row_count"]
+    assert result["rows"][0] == {"genre": "sports", "row_count": 2}

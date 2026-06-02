@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -5,7 +6,6 @@ import pandas as pd
 from fastapi import HTTPException, UploadFile, status
 
 from tabular_analyst.core.config import Settings
-
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx"}
 
@@ -22,6 +22,7 @@ def read_dataframe(path: Path, settings: Settings) -> pd.DataFrame:
     if path.suffix.lower() == ".csv":
         df = pd.read_csv(path)
     else:
+        _validate_xlsx_container(path, settings)
         df = pd.read_excel(path)
     if df.empty:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset is empty.")
@@ -31,6 +32,16 @@ def read_dataframe(path: Path, settings: Settings) -> pd.DataFrame:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Dataset has too many columns.")
     df.columns = [str(col).strip() or f"column_{idx}" for idx, col in enumerate(df.columns)]
     return df
+
+
+def _validate_xlsx_container(path: Path, settings: Settings) -> None:
+    if not zipfile.is_zipfile(path):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="XLSX file is not a valid Office document.")
+    max_uncompressed = settings.max_upload_mb * 1024 * 1024 * 20
+    with zipfile.ZipFile(path) as archive:
+        total_uncompressed = sum(info.file_size for info in archive.infolist())
+        if total_uncompressed > max_uncompressed:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="XLSX expands beyond the governed safety limit.")
 
 
 async def persist_upload(file: UploadFile, settings: Settings) -> tuple[str, Path, str]:
@@ -49,4 +60,3 @@ async def persist_upload(file: UploadFile, settings: Settings) -> tuple[str, Pat
                 raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Upload exceeds size limit.")
             out.write(chunk)
     return dataset_id, stored_path, content_type
-

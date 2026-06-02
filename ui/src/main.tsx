@@ -49,11 +49,17 @@ function ResultTable({ table }: { table: Analysis["tables"][number] }) {
       <h3>{table.name} · {table.row_count} rows</h3>
       <table>
         <thead><tr>{table.columns.map((col) => <th key={col}>{col}</th>)}</tr></thead>
-        <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
+        <tbody>{table.rows.slice(0, 12).map((row, idx) => <tr key={idx}>{table.columns.map((col) => <td key={col}>{formatCell(row[col])}</td>)}</tr>)}</tbody>
       </table>
     </div>
   );
 }
+
+const formatCell = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return String(value);
+};
 
 const api = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
   const token = localStorage.getItem("demoToken") || "";
@@ -99,17 +105,20 @@ function Plot({ figure }: { figure: unknown }) {
       cancelled = true;
     };
   }, [figure]);
-  return <div className="plot" ref={ref} />;
+  return <div className="plot" ref={ref} role="img" aria-label="Validated Plotly chart" />;
 }
 
 function ToolTrace({ analysis }: { analysis: Analysis | null }) {
   if (!analysis) return <p>Run an analysis to inspect validated tool outputs.</p>;
 
-  const tableForTool = (tool: string) => {
-    if (tool === "run_safe_sql") return analysis.tables.find((table) => table.name === "query_result");
-    if (tool === "run_transform") return analysis.tables.find((table) => table.name === "transform_result");
-    return undefined;
-  };
+  const tableByCallIndex = new Map<number, Analysis["tables"][number]>();
+  let tableCursor = 0;
+  analysis.tool_calls.forEach((call, index) => {
+    if (call.tool !== "run_safe_sql" && call.tool !== "run_transform") return;
+    const table = analysis.tables[tableCursor];
+    if (table) tableByCallIndex.set(index, table);
+    tableCursor += 1;
+  });
 
   const outputSummary = (call: Analysis["tool_calls"][number]) => {
     if (call.status === "error") return call.error || "The tool failed validation.";
@@ -124,7 +133,7 @@ function ToolTrace({ analysis }: { analysis: Analysis | null }) {
   return (
     <>
       {analysis.tool_calls.map((call, index) => {
-        const table = tableForTool(call.tool);
+        const table = tableByCallIndex.get(index);
         return (
           <section key={`${call.tool}-${index}`} className="tool-output">
             <div className="tool-heading">
@@ -150,7 +159,7 @@ function App() {
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [activeAnalysis, setActiveAnalysis] = useState<Analysis | null>(null);
   const [question, setQuestion] = useState("Profile this dataset and tell me the main data-quality issues.");
-  const [token, setToken] = useState(localStorage.getItem("demoToken") || "change-me-demo-token");
+  const [token, setToken] = useState(localStorage.getItem("demoToken") || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -200,7 +209,7 @@ function App() {
     }
   };
 
-  const loadDemo = async (name: "wine-quality" | "owid-co2") => {
+  const loadDemo = async (name: "wine-quality" | "owid-co2" | "video-games") => {
     setBusy(true);
     setError(null);
     try {
@@ -256,6 +265,7 @@ function App() {
   const trustState = useMemo(() => {
     if (!activeAnalysis) return "waiting";
     if (activeAnalysis.validation.blocked) return "blocked";
+    if (activeAnalysis.warnings.some((warning) => warning.toLowerCase().includes("limited"))) return "limited";
     if (activeAnalysis.validation.sql_safety === "passed" || activeAnalysis.validation.transform_validation === "passed") return "validated";
     return "limited";
   }, [activeAnalysis]);
@@ -270,7 +280,7 @@ function App() {
         </div>
         <label className="token-field">
           Demo token
-          <input value={token} onChange={(event) => setToken(event.target.value)} />
+          <input type="password" value={token} placeholder="Enter demo token" onChange={(event) => setToken(event.target.value)} />
         </label>
       </header>
 
@@ -286,6 +296,7 @@ function App() {
             <div className="primary-actions">
               <button disabled={busy} onClick={() => loadDemo("wine-quality")}>Load Wine Quality demo</button>
               <button disabled={busy} onClick={() => loadDemo("owid-co2")}>Load CO2 demo</button>
+              <button disabled={busy} onClick={() => loadDemo("video-games")}>Load Video Games demo</button>
             </div>
             <label className="upload-box">
               <input type="file" accept=".csv,.xlsx" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
@@ -443,7 +454,7 @@ function App() {
                 <div className="mini-table">
                   <table>
                     <thead><tr>{previewColumns.slice(0, 5).map((col) => <th key={col}>{col}</th>)}</tr></thead>
-                    <tbody>{selected.profile.preview.slice(0, 5).map((row, idx) => <tr key={idx}>{previewColumns.slice(0, 5).map((col) => <td key={col}>{String(row[col] ?? "")}</td>)}</tr>)}</tbody>
+                    <tbody>{selected.profile.preview.slice(0, 5).map((row, idx) => <tr key={idx}>{previewColumns.slice(0, 5).map((col) => <td key={col}>{formatCell(row[col])}</td>)}</tr>)}</tbody>
                   </table>
                 </div>
               )}
@@ -451,6 +462,7 @@ function App() {
           </section>
         </section>
       )}
+      {busy && <div className="loading-layer" role="status">Running governed operation…</div>}
     </main>
   );
 }

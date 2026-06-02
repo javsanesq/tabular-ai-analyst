@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -12,6 +12,7 @@ class DatasetRecord(Base):
     __tablename__ = "datasets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), index=True, default="legacy-demo")
     stored_filename: Mapped[str] = mapped_column(String(255))
     original_filename: Mapped[str] = mapped_column(String(255))
     content_type: Mapped[str] = mapped_column(String(120))
@@ -29,6 +30,7 @@ class AnalysisRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(36), ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), index=True, default="legacy-demo")
     question: Mapped[str] = mapped_column(Text)
     answer_json: Mapped[dict] = mapped_column(JSON)
     tool_calls_json: Mapped[list] = mapped_column(JSON)
@@ -44,6 +46,7 @@ class EvalRunRecord(Base):
     __tablename__ = "eval_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_hash: Mapped[str] = mapped_column(String(64), index=True, default="legacy-demo")
     status: Mapped[str] = mapped_column(String(40))
     metrics_json: Mapped[dict] = mapped_column(JSON)
     cases_json: Mapped[list] = mapped_column(JSON)

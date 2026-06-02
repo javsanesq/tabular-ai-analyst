@@ -18,14 +18,14 @@ def profile_dataframe(df: pd.DataFrame, sample_size: int = 20) -> dict[str, Any]
     for name in df.columns:
         series = df[name]
         non_null = series.dropna()
-        numeric = pd.to_numeric(series, errors="coerce")
+        numeric = _coerce_numeric(series)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            parsed_dates = pd.to_datetime(series, errors="coerce")
+            parsed_dates = _coerce_datetime(series)
         non_null_count = max(1, int(series.notna().sum()))
         numeric_ratio = float(numeric.notna().sum()) / non_null_count
         date_ratio = float(parsed_dates.notna().sum()) / non_null_count
-        dtype = "numeric" if numeric_ratio > 0.9 else "datetime" if date_ratio > 0.8 else "categorical"
+        dtype = "numeric" if numeric_ratio >= 0.75 else "datetime" if date_ratio > 0.8 and numeric_ratio < 0.5 else "categorical"
         stats: dict[str, Any] = {
             "name": name,
             "inferred_type": dtype,
@@ -79,7 +79,7 @@ def detect_quality_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
             issues.append({"severity": "medium", "type": "constant_column", "column": name, "message": "Column has one or zero distinct non-null values."})
         if unique > max(50, len(df) * 0.7) and series.dtype == "object":
             issues.append({"severity": "low", "type": "high_cardinality", "column": name, "message": "Categorical-looking column has high cardinality."})
-        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        numeric = _coerce_numeric(series).dropna()
         if len(numeric) >= 10:
             q1, q3 = numeric.quantile([0.25, 0.75])
             iqr = q3 - q1
@@ -87,4 +87,39 @@ def detect_quality_issues(df: pd.DataFrame) -> list[dict[str, Any]]:
                 outliers = numeric[(numeric < q1 - 1.5 * iqr) | (numeric > q3 + 1.5 * iqr)]
                 if len(outliers) / len(numeric) >= 0.05:
                     issues.append({"severity": "low", "type": "outliers", "column": name, "message": f"{len(outliers)} potential IQR outliers detected."})
+        if not pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_datetime64_any_dtype(series):
+            text_values = series.dropna().astype(str)
+            numeric_values = _coerce_numeric(text_values)
+            formula_like = (text_values.str.match(r"^[=+\-@]") & numeric_values.isna()).sum()
+            if formula_like:
+                issues.append({"severity": "medium", "type": "formula_like_values", "column": name, "message": f"{int(formula_like)} value(s) look like spreadsheet formulas and should be treated as text."})
     return issues
+
+
+def _coerce_numeric(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.replace("€", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .replace({"": None, "nan": None, "None": None})
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def _coerce_datetime(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return pd.to_datetime(series, errors="coerce")
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.Series(pd.NaT, index=series.index)
+    text = series.dropna().astype(str)
+    if text.empty:
+        return pd.to_datetime(series, errors="coerce")
+    date_like_ratio = text.str.contains(r"[-/]|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", case=False, regex=True).mean()
+    if date_like_ratio < 0.5:
+        return pd.Series(pd.NaT, index=series.index)
+    return pd.to_datetime(series, errors="coerce")

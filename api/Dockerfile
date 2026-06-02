@@ -14,8 +14,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl && rm -rf /var/lib/apt/lists/*
-
 COPY api/pyproject.toml /app/api/pyproject.toml
 COPY api/src /app/api/src
 RUN pip install --no-cache-dir -e /app/api
@@ -24,6 +22,8 @@ COPY api /app/api
 COPY samples /app/samples
 COPY evals /app/evals
 COPY --from=ui-build /app/ui/dist /app/ui/dist
+RUN useradd --create-home --shell /usr/sbin/nologin appuser && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 CMD ["uvicorn", "tabular_analyst.main:app", "--host", "0.0.0.0", "--port", "8000"]

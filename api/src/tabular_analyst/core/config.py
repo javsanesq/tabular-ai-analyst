@@ -36,11 +36,11 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     def validate_runtime(self) -> None:
+        if self.app_env != "test" and not self.api_auth_token:
+            raise RuntimeError("API_AUTH_TOKEN is required outside APP_ENV=test.")
         if self.app_env == "production":
             if self.llm_provider != "openai":
                 raise RuntimeError("Production requires LLM_PROVIDER=openai.")
-            if not self.api_auth_token:
-                raise RuntimeError("Production requires API_AUTH_TOKEN.")
             if not self.openai_api_key:
                 raise RuntimeError("Production requires OPENAI_API_KEY.")
         if self.app_env not in {"test"} and not self.database_url.startswith("postgresql"):

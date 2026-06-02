@@ -2,9 +2,9 @@
 
 ## Supported Scope
 
-This is a portfolio-grade, single-tenant governed data-analysis assistant. It demonstrates upload validation, secret handling, constrained SQL execution, tool-call validation, rate-limited demo access, Docker deployment, and explicit unsupported-action blocking.
+This is a portfolio-grade governed data-analysis assistant. It demonstrates upload validation, secret handling, constrained SQL execution, tool-call validation, owner-scoped demo access, rate-limited demo usage, Docker deployment, and explicit unsupported-action blocking.
 
-It does not claim enterprise authentication, tenant isolation, compliance certification, or production data-loss prevention.
+It does not claim enterprise authentication, compliance certification, or production data-loss prevention. Demo isolation is scoped to the authenticated demo identity and should be replaced with real user identity before handling sensitive third-party data.
 
 ## Secrets
 
@@ -12,7 +12,7 @@ Never commit real secrets. Use `.env.example` as the documented local contract. 
 
 ## Upload Safety
 
-The API accepts only CSV and XLSX files, enforces size limits, and caps row and column counts. Runtime uploads and local database files are ignored by Git.
+The API accepts only CSV and XLSX files, enforces size limits, validates XLSX containers before expansion, and caps row and column counts. Runtime uploads and local database files are ignored by Git. Formula-like spreadsheet values are treated as suspicious text and surfaced as data-quality warnings.
 
 ## Execution Safety
 
@@ -22,6 +22,6 @@ Tool failures are returned as structured validation metadata and saved in the an
 
 ## Hosted Demo Controls
 
-The hosted demo should require a shared demo token and enforce request quotas. Demo quota events are stored in the database using hashed identity keys, not raw tokens. Do not expose unrestricted OpenAI-backed analysis endpoints publicly.
+The hosted demo should require a shared demo token and enforce request quotas. Demo quota events are stored in the database using hashed identity keys, not raw tokens. Dataset, analysis, and eval-run reads are scoped to the authenticated owner hash. Do not expose unrestricted OpenAI-backed analysis endpoints publicly.
 
 The eval API accepts only curated benchmark IDs from the repository eval allowlist. It must not be used as a user-controlled server-side file reader.
