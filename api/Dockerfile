@@ -22,8 +22,11 @@ COPY api /app/api
 COPY samples /app/samples
 COPY evals /app/evals
 COPY --from=ui-build /app/ui/dist /app/ui/dist
-RUN useradd --create-home --shell /usr/sbin/nologin appuser && chown -R appuser:appuser /app
-USER appuser
+COPY api/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && chown -R appuser:appuser /app
 
 EXPOSE 8000
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "tabular_analyst.main:app", "--host", "0.0.0.0", "--port", "8000"]

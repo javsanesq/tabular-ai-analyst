@@ -26,9 +26,9 @@ import json
 import sys
 
 payload = json.loads(sys.stdin.read())
-assert payload["validation"]["sql_safety"] == "passed", payload
+assert payload["validation"]["transform_validation"] == "passed", payload
 assert payload["charts"], payload
-assert any(call["tool"] == "run_safe_sql" for call in payload["tool_calls"]), payload
+assert any(call["tool"] == "run_transform" for call in payload["tool_calls"]), payload
 print("Analysis smoke passed:", payload["id"])
 ' <<<"${ANALYSIS_JSON}"
 
